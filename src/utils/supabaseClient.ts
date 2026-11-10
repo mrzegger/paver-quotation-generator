@@ -1,0 +1,227 @@
+import { createClient, SupabaseClient, User } from '@supabase/supabase-js';
+import { QuotationData } from './storage';
+import { PaverItem } from '../data/paverCatalog';
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+
+export const isSupabaseConfigured = (): boolean => {
+  return Boolean(
+    supabaseUrl &&
+    supabaseAnonKey &&
+    supabaseUrl.startsWith('https://') &&
+    supabaseAnonKey.length > 20
+  );
+};
+
+// Create client or null if not yet configured
+export const supabase: SupabaseClient | null = isSupabaseConfigured()
+  ? createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+      },
+    })
+  : null;
+
+// =============================================================================
+// Auth Helpers
+// =============================================================================
+
+export async function getCurrentUser(): Promise<User | null> {
+  if (!supabase) return null;
+  const { data: { user } } = await supabase.auth.getUser();
+  return user;
+}
+
+export async function signInWithEmail(email: string, password: string) {
+  if (!supabase) throw new Error('Supabase is not configured yet. Please add your credentials in .env.local');
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) throw error;
+  return data;
+}
+
+export async function signUpWithEmail(email: string, password: string, fullName?: string) {
+  if (!supabase) throw new Error('Supabase is not configured yet. Please add your credentials in .env.local');
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      data: {
+        full_name: fullName || email.split('@')[0],
+      },
+    },
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function signOutUser() {
+  if (!supabase) return;
+  const { error } = await supabase.auth.signOut();
+  if (error) throw error;
+}
+
+// =============================================================================
+// Quotations Cloud Sync Helpers
+// =============================================================================
+
+export function mapDbRecordToQuotation(rec: any): QuotationData {
+  return {
+    id: rec.id,
+    quotationNumber: rec.quotation_number,
+    date: rec.date || '',
+    clientName: rec.client_name || '',
+    companyName: rec.company_name || '',
+    projectName: rec.project_name || '',
+    projectLocation: rec.project_location || '',
+    tableHeaderTitle: rec.table_header_title || 'Paver (Delivered)',
+    items: rec.items || [],
+    discount: rec.discount || {
+      enabled: false,
+      type: 'percentage',
+      value: 0,
+      amount: 0,
+      label: '',
+    },
+    delivery: rec.delivery || {
+      enabled: false,
+      description: '',
+      deliveriesCount: '',
+      amount: 0,
+    },
+    termsAndConditions: rec.terms_page1 || '',
+    termsPage1: rec.terms_page1 || '',
+    termsPage2: rec.terms_page2 || '',
+    paymentDetails: rec.payment_details || {
+      payableTo: 'Kuma Concrete Inc.',
+      bankName: 'BDO (Banco de Oro)',
+      accountNumber: '008590004762',
+      accountName: 'Kuma Concrete Inc.',
+    },
+    signatory: rec.signatory || {
+      name: 'Enrico G. Vazquez',
+      title: 'President',
+    },
+    createdByUserId: rec.created_by_user_id,
+    createdByEmail: rec.created_by_email,
+    createdByName: rec.created_by_name,
+    createdAt: rec.created_at ? new Date(rec.created_at).getTime() : Date.now(),
+    updatedAt: rec.updated_at ? new Date(rec.updated_at).getTime() : Date.now(),
+  };
+}
+
+export async function fetchCloudQuotations(): Promise<QuotationData[]> {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from('quotations')
+    .select('*')
+    .order('updated_at', { ascending: false });
+
+  if (error) {
+    console.error('Error fetching quotations from Supabase:', error);
+    throw error;
+  }
+
+  return (data || []).map(mapDbRecordToQuotation);
+}
+
+export async function saveCloudQuotation(
+  quote: QuotationData,
+  user?: User | null
+): Promise<void> {
+  if (!supabase) return;
+
+  const userEmail = user?.email || quote.createdByEmail || '';
+  const userName = user?.user_metadata?.full_name || quote.createdByName || userEmail.split('@')[0] || '';
+  const userId = user?.id || quote.createdByUserId || null;
+
+  const dbPayload = {
+    id: quote.id,
+    quotation_number: quote.quotationNumber,
+    date: quote.date,
+    client_name: quote.clientName,
+    company_name: quote.companyName || '',
+    project_name: quote.projectName,
+    project_location: quote.projectLocation,
+    table_header_title: quote.tableHeaderTitle || 'Paver (Delivered)',
+    items: quote.items,
+    discount: quote.discount,
+    delivery: quote.delivery,
+    terms_page1: quote.termsPage1,
+    terms_page2: quote.termsPage2,
+    payment_details: quote.paymentDetails,
+    signatory: quote.signatory,
+    created_by_user_id: userId,
+    created_by_email: userEmail,
+    created_by_name: userName,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { error } = await supabase
+    .from('quotations')
+    .upsert(dbPayload, { onConflict: 'id' });
+
+  if (error) {
+    console.error('Error saving quotation to Supabase:', error);
+    throw error;
+  }
+}
+
+export async function deleteCloudQuotation(id: string): Promise<void> {
+  if (!supabase) return;
+  const { error } = await supabase
+    .from('quotations')
+    .delete()
+    .eq('id', id);
+
+  if (error) {
+    console.error('Error deleting quotation from Supabase:', error);
+    throw error;
+  }
+}
+
+// =============================================================================
+// Price List (Paver Catalog) Cloud Sync Helpers
+// =============================================================================
+
+export async function syncPriceListToCloud(catalog: PaverItem[], user?: User | null): Promise<void> {
+  if (!supabase) throw new Error('Supabase is not configured');
+  const userEmail = user?.email || 'Admin';
+
+  const { error } = await supabase
+    .from('paver_catalog')
+    .upsert({
+      id: 'default',
+      catalog_data: catalog,
+      updated_by_email: userEmail,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'id' });
+
+  if (error) {
+    console.error('Error syncing price list to Supabase:', error);
+    throw error;
+  }
+}
+
+export async function fetchPriceListFromCloud(): Promise<{ catalog: PaverItem[]; updatedBy?: string; updatedAt?: string } | null> {
+  if (!supabase) return null;
+  const { data, error } = await supabase
+    .from('paver_catalog')
+    .select('*')
+    .eq('id', 'default')
+    .maybeSingle();
+
+  if (error) {
+    console.error('Error fetching price list from Supabase:', error);
+    throw error;
+  }
+
+  if (!data || !Array.isArray(data.catalog_data)) return null;
+
+  return {
+    catalog: data.catalog_data as PaverItem[],
+    updatedBy: data.updated_by_email,
+    updatedAt: data.updated_at,
+  };
+}
