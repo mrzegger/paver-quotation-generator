@@ -1,8 +1,8 @@
 -- =============================================================================
 -- Kuma Concrete Paver Quotation Generator - Supabase Schema
 -- =============================================================================
--- Run this script in your Supabase project's SQL Editor (Dashboard > SQL Editor)
--- It creates the quotations table, paver_catalog table, and Row Level Security policies.
+-- Run this entire script in your Supabase SQL Editor.
+-- Make sure the entire script is selected or nothing is highlighted when running.
 -- =============================================================================
 
 -- 1. Create quotations table
@@ -46,22 +46,28 @@ CREATE TABLE IF NOT EXISTS public.paver_catalog (
 ALTER TABLE public.quotations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.paver_catalog ENABLE ROW LEVEL SECURITY;
 
--- 4. RLS Policies for quotations
--- Any authenticated user in your team can view quotations
+-- 4. Clean existing policies (allows safe re-running)
+DROP POLICY IF EXISTS "Allow authenticated users to read quotations" ON public.quotations;
+DROP POLICY IF EXISTS "Allow authenticated users to insert quotations" ON public.quotations;
+DROP POLICY IF EXISTS "Allow authenticated users to update quotations" ON public.quotations;
+DROP POLICY IF EXISTS "Allow authenticated users to delete quotations" ON public.quotations;
+
+DROP POLICY IF EXISTS "Allow authenticated users to read paver catalog" ON public.paver_catalog;
+DROP POLICY IF EXISTS "Allow authenticated users to upsert paver catalog" ON public.paver_catalog;
+
+-- 5. RLS Policies for quotations
 CREATE POLICY "Allow authenticated users to read quotations"
     ON public.quotations
     FOR SELECT
     TO authenticated
     USING (true);
 
--- Authenticated users can insert quotations
 CREATE POLICY "Allow authenticated users to insert quotations"
     ON public.quotations
     FOR INSERT
     TO authenticated
     WITH CHECK (auth.uid() = created_by_user_id OR created_by_user_id IS NULL);
 
--- Authenticated users can update quotations
 CREATE POLICY "Allow authenticated users to update quotations"
     ON public.quotations
     FOR UPDATE
@@ -69,14 +75,13 @@ CREATE POLICY "Allow authenticated users to update quotations"
     USING (true)
     WITH CHECK (true);
 
--- Authenticated users can delete quotations
 CREATE POLICY "Allow authenticated users to delete quotations"
     ON public.quotations
     FOR DELETE
     TO authenticated
     USING (true);
 
--- 5. RLS Policies for paver_catalog
+-- 6. RLS Policies for paver_catalog
 CREATE POLICY "Allow authenticated users to read paver catalog"
     ON public.paver_catalog
     FOR SELECT
@@ -90,4 +95,4 @@ CREATE POLICY "Allow authenticated users to upsert paver catalog"
     USING (true)
     WITH CHECK (true);
 
--- Done!
+-- Success!
