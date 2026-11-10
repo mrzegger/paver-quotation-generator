@@ -19,6 +19,8 @@ import {
   RotateCcw,
   Tag,
   Briefcase,
+  Ruler,
+  Calculator,
 } from 'lucide-react';
 import {
   QuotationData,
@@ -33,6 +35,9 @@ import {
   sqmToPieces,
   piecesToSqm,
   calculateQuotationSummary,
+  calculatePcsPerSqm,
+  calculatePaverVolumeM3,
+  calculateSuggestedCustomPrice,
   formatPHP,
 } from '../utils/pricingCalculator';
 
@@ -130,6 +135,52 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({
     updateField('items', [...quote.items, newItem]);
   };
 
+  // Add a new custom size paver item
+  const handleAddCustomPaverItem = () => {
+    const len = 200;
+    const wid = 200;
+    const thk = 60;
+    const finish: PaverFinish = 'classic';
+    const color = 'Cement Gray';
+    const pcsPerSqm = calculatePcsPerSqm(len, wid);
+    const suggestedPrice = calculateSuggestedCustomPrice(len, wid, thk, finish, catalog);
+    const defaultSqm = 50;
+    const pieces = sqmToPieces(defaultSqm, pcsPerSqm);
+    const unitPriceNonVat = calculatePaverUnitPrice(suggestedPrice, pcsPerSqm, false, 0);
+    const totalNonVat = Math.round((pieces * unitPriceNonVat + Number.EPSILON) * 100) / 100;
+
+    const newItem: QuotationLineItem = {
+      id: `item-${Date.now()}`,
+      type: 'paver',
+      paverId: '__CUSTOM__',
+      isCustomDimensions: true,
+      customLengthMm: len,
+      customWidthMm: wid,
+      customThicknessMm: thk,
+      customPaverName: 'Custom Paver',
+      suggestedPriceVatInc: suggestedPrice,
+      isCustomPriceOverridden: false,
+      category: 'Special',
+      name: 'Custom Paver',
+      finish,
+      dimensions: `${len}×${wid}×${thk}mm`,
+      pcsPerSqm,
+      color,
+      isCustomColor: false,
+      isColoredSurcharge: false,
+      colorSurchargePerSqm: 0,
+      sqm: defaultSqm,
+      pieces,
+      description: `Classic Custom Paver - ${len}×${wid}×${thk}mm`,
+      details: `• ${pcsPerSqm} pcs/sqm\n${defaultSqm.toFixed(2)} SQM\n• Color:${color}`,
+      unitPriceVatInc: suggestedPrice,
+      unitPriceNonVat,
+      totalNonVat,
+    };
+
+    updateField('items', [...quote.items, newItem]);
+  };
+
   // Add custom fee item
   const handleAddCustomItem = () => {
     const newItem: QuotationLineItem = {
@@ -152,14 +203,49 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({
 
     // If paver properties changed, recalculate prices
     if (updated.type === 'paver') {
-      const paver = catalog.find((p) => p.id === updated.paverId) || catalog[0];
+      const isCustomDim = updated.isCustomDimensions || updated.paverId === '__CUSTOM__';
       const finish = updated.finish || 'classic';
       const isColored = updated.isColoredSurcharge ?? false;
       const surchargePerSqm = updated.colorSurchargePerSqm !== undefined
         ? updated.colorSurchargePerSqm
         : (isColored ? 300 : 0);
-      const baseVatInc = paver.pricesVatInc[finish] || paver.pricesVatInc.classic || 0;
-      const pcsPerSqm = paver.pcsPerSqm;
+
+      let baseVatInc = 0;
+      let pcsPerSqm = 50;
+      let dimensions = '200x200x60mm';
+      let displayName = 'Paver';
+
+      if (isCustomDim) {
+        updated.isCustomDimensions = true;
+        updated.paverId = '__CUSTOM__';
+
+        const len = updated.customLengthMm || 200;
+        const wid = updated.customWidthMm || 200;
+        const thk = updated.customThicknessMm || 60;
+        updated.customLengthMm = len;
+        updated.customWidthMm = wid;
+        updated.customThicknessMm = thk;
+
+        pcsPerSqm = calculatePcsPerSqm(len, wid);
+        const suggestedPrice = calculateSuggestedCustomPrice(len, wid, thk, finish, catalog);
+        updated.suggestedPriceVatInc = suggestedPrice;
+
+        if (updated.isCustomPriceOverridden && updated.unitPriceVatInc !== undefined && updated.unitPriceVatInc > 0) {
+          baseVatInc = updated.unitPriceVatInc;
+        } else {
+          baseVatInc = suggestedPrice;
+          updated.unitPriceVatInc = suggestedPrice;
+        }
+
+        dimensions = `${len}×${wid}×${thk}mm`;
+        displayName = updated.customPaverName || 'Custom Paver';
+      } else {
+        const paver = catalog.find((p) => p.id === updated.paverId) || catalog[0];
+        baseVatInc = paver.pricesVatInc[finish] || paver.pricesVatInc.classic || 0;
+        pcsPerSqm = paver.pcsPerSqm;
+        dimensions = paver.dimensions;
+        displayName = paver.defaultDisplayName || paver.name;
+      }
 
       // Handle SQM / Pieces sync
       let pieces = updated.pieces ?? 0;
@@ -177,9 +263,9 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({
       const totalNonVat = Math.round((pieces * unitPriceNonVat + Number.EPSILON) * 100) / 100;
 
       const finishPrefix = finish === 'classic' ? 'Classic' : finish.toUpperCase() + ' Pervious';
-      updated.description = `${finishPrefix} ${paver.defaultDisplayName || paver.name} - ${paver.dimensions}`;
+      updated.description = `${finishPrefix} ${displayName} - ${dimensions}`;
       updated.details = `• ${pcsPerSqm} pcs/sqm\n${sqm.toFixed(2)} SQM\n• Color:${updated.color || 'Cement Gray'}`;
-      updated.dimensions = paver.dimensions;
+      updated.dimensions = dimensions;
       updated.pcsPerSqm = pcsPerSqm;
       updated.unitPriceVatInc = baseVatInc;
       updated.unitPriceNonVat = unitPriceNonVat;
@@ -416,6 +502,14 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({
             </button>
             <button
               type="button"
+              onClick={handleAddCustomPaverItem}
+              className="px-3 py-1.5 border border-amber-300 bg-amber-50/60 hover:bg-amber-100/60 text-amber-900 rounded-lg text-xs font-bold flex items-center gap-1.5 transition shadow-2xs"
+            >
+              <Ruler className="w-3.5 h-3.5 text-amber-600" />
+              Add Custom Size
+            </button>
+            <button
+              type="button"
               onClick={handleAddPaverItem}
               className="px-3.5 py-1.5 bg-gray-900 hover:bg-black text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-sm transition"
             >
@@ -531,14 +625,39 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                   {/* Paver Product Dropdown */}
                   <div className="md:col-span-2">
-                    <label className="block text-[11px] font-bold text-gray-700 mb-1">
-                      Paver Product & Dimensions
+                    <label className="block text-[11px] font-bold text-gray-700 mb-1 flex items-center justify-between">
+                      <span>Paver Product & Dimensions</span>
+                      {item.isCustomDimensions && (
+                        <span className="text-[10px] text-amber-700 font-bold bg-amber-100 px-1.5 py-0.2 rounded">
+                          Custom Size Active
+                        </span>
+                      )}
                     </label>
                     <select
-                      value={item.paverId || currentPaver.id}
-                      onChange={(e) => updateLineItem(idx, { paverId: e.target.value })}
+                      value={item.isCustomDimensions ? '__CUSTOM__' : (item.paverId || currentPaver.id)}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === '__CUSTOM__') {
+                          updateLineItem(idx, {
+                            isCustomDimensions: true,
+                            paverId: '__CUSTOM__',
+                            customLengthMm: item.customLengthMm || 200,
+                            customWidthMm: item.customWidthMm || 200,
+                            customThicknessMm: item.customThicknessMm || 60,
+                            customPaverName: item.customPaverName || 'Custom Paver',
+                            isCustomPriceOverridden: false
+                          });
+                        } else {
+                          updateLineItem(idx, {
+                            isCustomDimensions: false,
+                            paverId: val,
+                            isCustomPriceOverridden: false
+                          });
+                        }
+                      }}
                       className="w-full p-2 border border-gray-300 rounded-lg text-xs font-semibold focus:ring-2 focus:ring-amber-500 bg-white"
                     >
+                      <option value="__CUSTOM__">✨ Custom Paver Size & Dimensions...</option>
                       {['Rectangular', 'Square', 'Plank', 'Special'].map((cat) => (
                         <optgroup key={cat} label={cat}>
                           {catalog
@@ -564,13 +683,13 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({
                       className="w-full p-2 border border-gray-300 rounded-lg text-xs font-semibold focus:ring-2 focus:ring-amber-500 bg-white"
                     >
                       <option value="classic">Classic (Standard)</option>
-                      {currentPaver.pricesVatInc.g1 !== undefined && (
+                      {(item.isCustomDimensions || currentPaver.pricesVatInc.g1 !== undefined) && (
                         <option value="g1">G1 Pervious (Super-Fine)</option>
                       )}
-                      {currentPaver.pricesVatInc.g2 !== undefined && (
+                      {(item.isCustomDimensions || currentPaver.pricesVatInc.g2 !== undefined) && (
                         <option value="g2">G2 Pervious (Fine)</option>
                       )}
-                      {currentPaver.pricesVatInc.g3 !== undefined && (
+                      {(item.isCustomDimensions || currentPaver.pricesVatInc.g3 !== undefined) && (
                         <option value="g3">G3 Pervious (Coarse)</option>
                       )}
                     </select>
@@ -680,6 +799,122 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({
                     )}
                   </div>
                 </div>
+
+                {/* Custom Dimensions & Volumetric Pricing Panel */}
+                {item.isCustomDimensions && (
+                  <div className="p-3.5 bg-gradient-to-r from-amber-50/70 via-orange-50/40 to-amber-50/70 border border-amber-200 rounded-xl space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-200/60 pb-2">
+                      <div className="flex items-center gap-2">
+                        <Ruler className="w-4 h-4 text-amber-700" />
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-amber-900">
+                          Custom Paver Dimensions & Volumetric Pricing
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-gray-600 flex items-center gap-2">
+                        <span>Volume: <strong className="text-gray-900 font-mono">{((item.customLengthMm || 200) * (item.customWidthMm || 200) * (item.customThicknessMm || 60) / 1e9).toFixed(6)} m³</strong></span>
+                        <span>•</span>
+                        <span>Coverage: <strong className="text-amber-800 font-mono">{item.pcsPerSqm} pcs/sqm</strong></span>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                      {/* Custom Name */}
+                      <div className="col-span-2 md:col-span-1">
+                        <label className="block text-[10.5px] font-bold text-gray-700 mb-1">
+                          Custom Name
+                        </label>
+                        <input
+                          type="text"
+                          value={item.customPaverName || 'Custom Paver'}
+                          onChange={(e) => updateLineItem(idx, { customPaverName: e.target.value })}
+                          placeholder="e.g. Custom Paver"
+                          className="w-full p-1.5 border border-gray-300 rounded-lg text-xs font-semibold focus:ring-1 focus:ring-amber-500 bg-white"
+                        />
+                      </div>
+
+                      {/* Length */}
+                      <div>
+                        <label className="block text-[10.5px] font-bold text-gray-700 mb-1">
+                          Length (L in mm)
+                        </label>
+                        <input
+                          type="number"
+                          min="10"
+                          step="5"
+                          value={item.customLengthMm || 200}
+                          onChange={(e) => updateLineItem(idx, { customLengthMm: parseFloat(e.target.value) || 0 })}
+                          className="w-full p-1.5 border border-gray-300 rounded-lg text-xs font-mono font-bold focus:ring-1 focus:ring-amber-500 bg-white text-right"
+                        />
+                      </div>
+
+                      {/* Width */}
+                      <div>
+                        <label className="block text-[10.5px] font-bold text-gray-700 mb-1">
+                          Width (W in mm)
+                        </label>
+                        <input
+                          type="number"
+                          min="10"
+                          step="5"
+                          value={item.customWidthMm || 200}
+                          onChange={(e) => updateLineItem(idx, { customWidthMm: parseFloat(e.target.value) || 0 })}
+                          className="w-full p-1.5 border border-gray-300 rounded-lg text-xs font-mono font-bold focus:ring-1 focus:ring-amber-500 bg-white text-right"
+                        />
+                      </div>
+
+                      {/* Thickness */}
+                      <div>
+                        <label className="block text-[10.5px] font-bold text-gray-700 mb-1">
+                          Thickness (T in mm)
+                        </label>
+                        <input
+                          type="number"
+                          min="10"
+                          step="5"
+                          value={item.customThicknessMm || 60}
+                          onChange={(e) => updateLineItem(idx, { customThicknessMm: parseFloat(e.target.value) || 0 })}
+                          className="w-full p-1.5 border border-gray-300 rounded-lg text-xs font-mono font-bold focus:ring-1 focus:ring-amber-500 bg-white text-right"
+                        />
+                      </div>
+
+                      {/* Editable Price per pc (VAT Inc) + Suggested Price */}
+                      <div>
+                        <label className="block text-[10.5px] font-bold text-gray-700 mb-1 flex items-center justify-between">
+                          <span>Price / Pc (VAT Inc)</span>
+                          <button
+                            type="button"
+                            onClick={() => updateLineItem(idx, {
+                              unitPriceVatInc: item.suggestedPriceVatInc,
+                              isCustomPriceOverridden: false
+                            })}
+                            title="Reset to volumetric suggested price based on m3"
+                            className="text-[9.5px] text-amber-700 hover:text-amber-800 underline font-semibold"
+                          >
+                            Apply Sug.
+                          </button>
+                        </label>
+                        <div className="relative">
+                          <input
+                            type="number"
+                            step="0.5"
+                            value={item.unitPriceVatInc ?? item.suggestedPriceVatInc ?? ''}
+                            onChange={(e) => updateLineItem(idx, {
+                              unitPriceVatInc: parseFloat(e.target.value) || 0,
+                              isCustomPriceOverridden: true
+                            })}
+                            className={`w-full p-1.5 border rounded-lg text-xs font-mono font-bold text-right focus:ring-1 focus:ring-amber-500 bg-white ${
+                              item.isCustomPriceOverridden ? 'border-amber-500 text-amber-900 bg-amber-50/30' : 'border-gray-300 text-gray-900'
+                            }`}
+                          />
+                        </div>
+                        <p className="text-[10px] text-gray-500 mt-1 flex justify-between">
+                          <span>Suggested: <strong className="text-gray-800">₱{(item.suggestedPriceVatInc || 0).toFixed(2)}</strong></span>
+                          <span className="text-amber-700 font-medium">({item.pcsPerSqm} pcs/m²)</span>
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Bi-directional Quantity and Pricing Grid */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
