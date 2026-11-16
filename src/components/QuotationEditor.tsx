@@ -21,6 +21,8 @@ import {
   Briefcase,
   Ruler,
   Calculator,
+  Package,
+  Receipt,
 } from 'lucide-react';
 import {
   QuotationData,
@@ -28,9 +30,11 @@ import {
   DEFAULT_TERMS_PAGE_1,
   DEFAULT_TERMS_PAGE_2,
 } from '../utils/storage';
+import { RichTextTermsEditor } from './RichTextTermsEditor';
 import { PaverItem, PaverFinish, STANDARD_COLORS } from '../data/paverCatalog';
 import {
   QuotationLineItem,
+  QuotationVatConfig,
   calculatePaverUnitPrice,
   sqmToPieces,
   piecesToSqm,
@@ -38,6 +42,8 @@ import {
   calculatePcsPerSqm,
   calculatePaverVolumeM3,
   calculateSuggestedCustomPrice,
+  getDefaultDeliveryDescription,
+  DEFAULT_PICKUP_DESCRIPTION,
   formatPHP,
 } from '../utils/pricingCalculator';
 
@@ -56,6 +62,14 @@ const HEADER_TITLE_PRESETS = [
   'Paver (Ex-Works)',
 ];
 
+const TERMS_FONT_SIZE_OPTIONS = [
+  { label: '8 pt (Compact)', value: 8 },
+  { label: '8.5 pt (Small)', value: 8.5 },
+  { label: '9.2 pt (Standard)', value: 9.2 },
+  { label: '10 pt (Medium)', value: 10 },
+  { label: '11 pt (Large)', value: 11 },
+];
+
 export const QuotationEditor: React.FC<QuotationEditorProps> = ({
   quote,
   catalog,
@@ -64,28 +78,99 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({
   onOpenPriceList,
 }) => {
   const [showTermsAccordion, setShowTermsAccordion] = useState(false);
-  const summary = calculateQuotationSummary(quote.items, quote.discount, quote.delivery);
+  const vatConfig: QuotationVatConfig = quote.vatConfig || {
+    enabled: true,
+    rate: 12,
+    label: 'Plus: 12% Vat',
+    showZeroVatRow: true,
+  };
+  const summary = calculateQuotationSummary(
+    quote.items,
+    quote.discount,
+    quote.delivery,
+    vatConfig
+  );
 
   // Field change handlers
   const updateField = <K extends keyof QuotationData>(key: K, value: QuotationData[K]) => {
     onChange({ ...quote, [key]: value });
   };
 
-  // Toggle delivery and automatically sync "Paver (Delivered)" <-> "Paver (Pick-up)" if using standard headers
+  const handleProjectLocationChange = (newLocation: string) => {
+    const isDeliveryMode = (quote.delivery.mode || 'delivery') === 'delivery';
+    const shouldAutoSyncDesc = isDeliveryMode && !quote.delivery.isCustomDescription;
+
+    onChange({
+      ...quote,
+      projectLocation: newLocation,
+      delivery: shouldAutoSyncDesc
+        ? {
+            ...quote.delivery,
+            description: getDefaultDeliveryDescription(newLocation),
+          }
+        : quote.delivery,
+    });
+  };
+
+  const handleDeliveryModeChange = (mode: 'delivery' | 'pickup') => {
+    const currentHeader = quote.tableHeaderTitle || 'Paver (Delivered)';
+    let nextHeader = currentHeader;
+    if (mode === 'pickup' && (currentHeader.toLowerCase().includes('delivered') || currentHeader.trim() === '')) {
+      nextHeader = 'Paver (Pick-up)';
+    } else if (mode === 'delivery' && (currentHeader.toLowerCase().includes('pick') || currentHeader.trim() === '')) {
+      nextHeader = 'Paver (Delivered)';
+    }
+
+    const nextDesc =
+      mode === 'pickup'
+        ? DEFAULT_PICKUP_DESCRIPTION
+        : getDefaultDeliveryDescription(quote.projectLocation);
+
+    const nextCount =
+      mode === 'pickup'
+        ? quote.delivery.deliveriesCount === '1 Delivery'
+          ? ''
+          : quote.delivery.deliveriesCount || ''
+        : quote.delivery.deliveriesCount || '1 Delivery';
+
+    onChange({
+      ...quote,
+      tableHeaderTitle: nextHeader,
+      delivery: {
+        ...quote.delivery,
+        enabled: true,
+        mode,
+        description: nextDesc,
+        isCustomDescription: false,
+        deliveriesCount: nextCount,
+      },
+    });
+  };
+
+  // Toggle delivery/pickup fee row
   const handleToggleDelivery = (enabled: boolean) => {
+    const mode = quote.delivery.mode || 'delivery';
     const currentHeader = quote.tableHeaderTitle || 'Paver (Delivered)';
     let nextHeader = currentHeader;
     if (
       enabled &&
+      mode === 'delivery' &&
       (currentHeader.toLowerCase().includes('pick') || currentHeader.trim() === '')
     ) {
       nextHeader = 'Paver (Delivered)';
     } else if (
-      !enabled &&
+      enabled &&
+      mode === 'pickup' &&
       (currentHeader.toLowerCase().includes('delivered') || currentHeader.trim() === '')
     ) {
       nextHeader = 'Paver (Pick-up)';
     }
+
+    const currentDesc = (quote.delivery.description || '').trim();
+    const defaultDesc =
+      mode === 'pickup'
+        ? DEFAULT_PICKUP_DESCRIPTION
+        : getDefaultDeliveryDescription(quote.projectLocation);
 
     onChange({
       ...quote,
@@ -93,6 +178,12 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({
       delivery: {
         ...quote.delivery,
         enabled,
+        description:
+          currentDesc === '' ||
+          currentDesc.startsWith('• For Delivery - Loading courtesy of Kuma') ||
+          (mode === 'delivery' && currentDesc === DEFAULT_PICKUP_DESCRIPTION)
+            ? defaultDesc
+            : quote.delivery.description,
       },
     });
   };
@@ -130,6 +221,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({
       unitPriceVatInc: baseVatInc,
       unitPriceNonVat,
       totalNonVat,
+      vatApplicable: true,
     };
 
     updateField('items', [...quote.items, newItem]);
@@ -176,6 +268,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({
       unitPriceVatInc: suggestedPrice,
       unitPriceNonVat,
       totalNonVat,
+      vatApplicable: true,
     };
 
     updateField('items', [...quote.items, newItem]);
@@ -191,6 +284,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({
       pieces: 1,
       unitPriceNonVat: 250000,
       totalNonVat: 250000,
+      vatApplicable: true,
     };
     updateField('items', [...quote.items, newItem]);
   };
@@ -424,7 +518,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({
             <input
               type="text"
               value={quote.projectLocation}
-              onChange={(e) => updateField('projectLocation', e.target.value)}
+              onChange={(e) => handleProjectLocationChange(e.target.value)}
               className="w-full p-2 border border-gray-300 rounded-lg text-xs focus:ring-2 focus:ring-amber-500 focus:outline-none"
               placeholder="e.g. Brgy. Tambo, Parañaque City"
             />
@@ -438,7 +532,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({
                 Table Heading Label (Red Header Above Table)
               </span>
               <span className="text-[10px] font-normal text-gray-400">
-                Auto-updates when toggling Delivery, or type custom text
+                Switches between Delivery Fee and Pick-up Packaging &amp; Loading
               </span>
             </label>
             <div className="flex flex-col sm:flex-row gap-2">
@@ -459,14 +553,54 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({
                       onClick={() => {
                         const isDeliv = preset.toLowerCase().includes('delivered');
                         const isPick = preset.toLowerCase().includes('pick');
-                        onChange({
-                          ...quote,
-                          tableHeaderTitle: preset,
-                          delivery: {
-                            ...quote.delivery,
-                            enabled: isDeliv ? true : isPick ? false : quote.delivery.enabled,
-                          },
-                        });
+                        if (isPick) {
+                          const currentDesc = (quote.delivery.description || '').trim();
+                          const wasDelivDesc =
+                            !currentDesc ||
+                            currentDesc.startsWith('• For Delivery') ||
+                            currentDesc.startsWith('• Delivered');
+                          onChange({
+                            ...quote,
+                            tableHeaderTitle: preset,
+                            delivery: {
+                              ...quote.delivery,
+                              enabled: true,
+                              mode: 'pickup',
+                              description: wasDelivDesc
+                                ? DEFAULT_PICKUP_DESCRIPTION
+                                : quote.delivery.description,
+                              isCustomDescription: !wasDelivDesc && quote.delivery.isCustomDescription,
+                              deliveriesCount:
+                                quote.delivery.deliveriesCount === '1 Delivery'
+                                  ? ''
+                                  : quote.delivery.deliveriesCount || '',
+                            },
+                          });
+                        } else if (isDeliv) {
+                          const currentDesc = (quote.delivery.description || '').trim();
+                          const wasPickupOrEmpty =
+                            !currentDesc ||
+                            currentDesc === DEFAULT_PICKUP_DESCRIPTION ||
+                            !quote.delivery.isCustomDescription;
+                          onChange({
+                            ...quote,
+                            tableHeaderTitle: preset,
+                            delivery: {
+                              ...quote.delivery,
+                              enabled: true,
+                              mode: 'delivery',
+                              description: wasPickupOrEmpty
+                                ? getDefaultDeliveryDescription(quote.projectLocation)
+                                : quote.delivery.description,
+                              isCustomDescription: wasPickupOrEmpty
+                                ? false
+                                : quote.delivery.isCustomDescription,
+                              deliveriesCount: quote.delivery.deliveriesCount || '1 Delivery',
+                            },
+                          });
+                        } else {
+                          updateField('tableHeaderTitle', preset);
+                        }
                       }}
                       className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border transition ${
                         isActive
@@ -537,17 +671,35 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({
                   key={item.id}
                   className="p-4 border border-purple-200 bg-purple-50/30 rounded-xl space-y-3"
                 >
-                  <div className="flex justify-between items-start">
+                  <div className="flex justify-between items-center">
                     <span className="text-[10px] font-bold tracking-wider uppercase text-purple-700 bg-purple-100 px-2 py-0.5 rounded">
                       Custom Fee Item
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => deleteLineItem(idx)}
-                      className="text-gray-400 hover:text-red-600 p-1 rounded"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <label
+                        className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded border cursor-pointer transition ${
+                          item.vatApplicable !== false
+                            ? 'bg-amber-50 border-amber-200 text-amber-800'
+                            : 'bg-gray-100 border-gray-200 text-gray-500'
+                        }`}
+                        title="Include this item when calculating VAT"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={item.vatApplicable !== false}
+                          onChange={(e) => updateLineItem(idx, { vatApplicable: e.target.checked })}
+                          className="w-3.5 h-3.5 text-amber-600 rounded border-gray-300 focus:ring-amber-500"
+                        />
+                        <span>VAT</span>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => deleteLineItem(idx)}
+                        className="text-gray-400 hover:text-red-600 p-1 rounded"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <div className="md:col-span-2 space-y-2">
@@ -602,6 +754,22 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({
                   </div>
 
                   <div className="flex items-center gap-1.5">
+                    <label
+                      className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg border cursor-pointer transition ${
+                        item.vatApplicable !== false
+                          ? 'bg-amber-50 border-amber-200 text-amber-800'
+                          : 'bg-gray-100 border-gray-200 text-gray-500'
+                      }`}
+                      title="Include this item when calculating VAT"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={item.vatApplicable !== false}
+                        onChange={(e) => updateLineItem(idx, { vatApplicable: e.target.checked })}
+                        className="w-3.5 h-3.5 text-amber-600 rounded border-gray-300 focus:ring-amber-500"
+                      />
+                      <span>VAT</span>
+                    </label>
                     <button
                       type="button"
                       onClick={() => duplicateLineItem(idx)}
@@ -1060,8 +1228,43 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({
           )}
         </div>
 
-        {/* Delivery Charge */}
+        {/* Delivery Charge / Pick-up Packaging & Loading Fee */}
         <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 space-y-3">
+          {/* Mode Toggle */}
+          <div className="flex items-center justify-between gap-2 pb-2 border-b border-gray-100">
+            <div className="inline-flex rounded-lg bg-gray-100 p-0.5 text-[11px] font-bold">
+              <button
+                type="button"
+                onClick={() => handleDeliveryModeChange('delivery')}
+                className={`px-2.5 py-1 rounded-md flex items-center gap-1 transition ${
+                  (quote.delivery.mode || 'delivery') === 'delivery'
+                    ? 'bg-white text-blue-700 shadow-2xs'
+                    : 'text-gray-500 hover:text-gray-800'
+                }`}
+              >
+                <Truck className="w-3 h-3" />
+                Delivery
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeliveryModeChange('pickup')}
+                className={`px-2.5 py-1 rounded-md flex items-center gap-1 transition ${
+                  quote.delivery.mode === 'pickup'
+                    ? 'bg-white text-amber-800 shadow-2xs'
+                    : 'text-gray-500 hover:text-gray-800'
+                }`}
+              >
+                <Package className="w-3 h-3" />
+                Pick-up (Packaging)
+              </button>
+            </div>
+            {quote.delivery.enabled && (
+              <span className="text-xs font-bold text-blue-600">
+                {formatPHP(quote.delivery.amount)}
+              </span>
+            )}
+          </div>
+
           <div className="flex items-center justify-between">
             <label className="text-xs font-bold text-gray-900 flex items-center gap-1.5 cursor-pointer">
               <input
@@ -1070,36 +1273,92 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({
                 onChange={(e) => handleToggleDelivery(e.target.checked)}
                 className="w-4 h-4 text-amber-600 rounded border-gray-300 focus:ring-amber-500"
               />
-              <Truck className="w-3.5 h-3.5 text-blue-600" />
-              Include Delivery Fee
+              {quote.delivery.mode === 'pickup' ? (
+                <>
+                  <Package className="w-3.5 h-3.5 text-amber-600" />
+                  <span>Include Packaging &amp; Loading Fee</span>
+                </>
+              ) : (
+                <>
+                  <Truck className="w-3.5 h-3.5 text-blue-600" />
+                  <span>Include Delivery Fee</span>
+                </>
+              )}
             </label>
+
             {quote.delivery.enabled && (
-              <span className="text-xs font-bold text-blue-600">
-                {formatPHP(quote.delivery.amount)}
-              </span>
+              <label
+                className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded border cursor-pointer transition ${
+                  quote.delivery.vatApplicable !== false
+                    ? 'bg-amber-50 border-amber-200 text-amber-800'
+                    : 'bg-gray-100 border-gray-200 text-gray-500'
+                }`}
+                title="Include this fee when calculating VAT"
+              >
+                <input
+                  type="checkbox"
+                  checked={quote.delivery.vatApplicable !== false}
+                  onChange={(e) =>
+                    updateField('delivery', {
+                      ...quote.delivery,
+                      vatApplicable: e.target.checked,
+                    })
+                  }
+                  className="w-3 h-3 text-amber-600 rounded border-gray-300"
+                />
+                <span>VAT</span>
+              </label>
             )}
           </div>
 
           {quote.delivery.enabled && (
-            <div className="space-y-2 pt-2">
+            <div className="space-y-2.5 pt-1">
               <div className="grid grid-cols-3 gap-2">
                 <div className="col-span-2">
-                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">
-                    Delivery Description
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-[10px] font-bold text-gray-500 uppercase">
+                      {quote.delivery.mode === 'pickup'
+                        ? 'Packaging & Loading Description'
+                        : 'Delivery Description'}
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        updateField('delivery', {
+                          ...quote.delivery,
+                          description:
+                            quote.delivery.mode === 'pickup'
+                              ? DEFAULT_PICKUP_DESCRIPTION
+                              : getDefaultDeliveryDescription(quote.projectLocation),
+                          isCustomDescription: false,
+                        })
+                      }
+                      className="text-[10px] font-semibold text-amber-700 hover:text-amber-800 underline"
+                    >
+                      {quote.delivery.mode === 'pickup' ? 'Use Default' : 'Use Project Location'}
+                    </button>
+                  </div>
                   <input
                     type="text"
                     value={quote.delivery.description}
                     onChange={(e) =>
-                      updateField('delivery', { ...quote.delivery, description: e.target.value })
+                      updateField('delivery', {
+                        ...quote.delivery,
+                        description: e.target.value,
+                        isCustomDescription: true,
+                      })
                     }
                     className="w-full p-1.5 border border-gray-300 rounded text-xs"
-                    placeholder="• Delivered to site (20T Trucks)"
+                    placeholder={
+                      quote.delivery.mode === 'pickup'
+                        ? DEFAULT_PICKUP_DESCRIPTION
+                        : '• For Delivery to <Project Location>'
+                    }
                   />
                 </div>
                 <div>
                   <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">
-                    Deliveries Count
+                    {quote.delivery.mode === 'pickup' ? 'Qty / Lot (Opt.)' : 'Deliveries Count'}
                   </label>
                   <input
                     type="text"
@@ -1111,14 +1370,16 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({
                       })
                     }
                     className="w-full p-1.5 border border-gray-300 rounded text-xs"
-                    placeholder="2 Deliveries"
+                    placeholder={quote.delivery.mode === 'pickup' ? 'e.g. 1 Lot' : '1 Delivery'}
                   />
                 </div>
               </div>
 
               <div>
                 <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">
-                  Delivery Fee (PHP Non-VAT)
+                  {quote.delivery.mode === 'pickup'
+                    ? 'Pallets, Wrapping & Loading Fee (PHP Non-VAT)'
+                    : 'Delivery Fee (PHP Non-VAT)'}
                 </label>
                 <input
                   type="number"
@@ -1130,12 +1391,199 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({
                     })
                   }
                   className="w-full p-1.5 border border-gray-300 rounded text-xs font-mono font-bold"
-                  placeholder="e.g. 60000"
+                  placeholder={quote.delivery.mode === 'pickup' ? 'Enter packaging & loading fee' : 'e.g. 25000'}
                 />
               </div>
             </div>
           )}
         </div>
+      </div>
+
+      {/* VAT Settings & Exemptions Card */}
+      <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Receipt className="w-4 h-4 text-amber-600" />
+            <h4 className="text-xs font-bold text-gray-900">
+              VAT Settings &amp; Item Exemptions
+            </h4>
+          </div>
+
+          <div className="inline-flex rounded-lg bg-gray-100 p-0.5 text-[11px] font-bold">
+            <button
+              type="button"
+              onClick={() =>
+                updateField('vatConfig', {
+                  ...vatConfig,
+                  enabled: true,
+                  rate: vatConfig.rate || 12,
+                  label:
+                    !vatConfig.label || vatConfig.label === 'VAT Exempt'
+                      ? `Plus: ${vatConfig.rate || 12}% Vat`
+                      : vatConfig.label,
+                })
+              }
+              className={`px-3 py-1 rounded-md transition ${
+                vatConfig.enabled
+                  ? 'bg-white text-amber-800 shadow-2xs'
+                  : 'text-gray-500 hover:text-gray-800'
+              }`}
+            >
+              VAT Applicable
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                updateField('vatConfig', {
+                  ...vatConfig,
+                  enabled: false,
+                  label:
+                    !vatConfig.label || /^Plus:\s*\d+% Vat$/i.test(vatConfig.label)
+                      ? 'VAT Exempt'
+                      : vatConfig.label,
+                  showZeroVatRow: vatConfig.showZeroVatRow ?? true,
+                })
+              }
+              className={`px-3 py-1 rounded-md transition ${
+                !vatConfig.enabled
+                  ? 'bg-emerald-600 text-white shadow-2xs'
+                  : 'text-gray-500 hover:text-gray-800'
+              }`}
+            >
+              VAT Exempt (0%)
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
+          {vatConfig.enabled ? (
+            <>
+              <div>
+                <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">
+                  VAT Rate (%)
+                </label>
+                <input
+                  type="number"
+                  step="0.5"
+                  min="0"
+                  max="100"
+                  value={vatConfig.rate}
+                  onChange={(e) => {
+                    const newRate = parseFloat(e.target.value) || 0;
+                    const isDefaultLabel =
+                      !vatConfig.label || /^Plus:\s*[\d.]+% Vat$/i.test(vatConfig.label);
+                    updateField('vatConfig', {
+                      ...vatConfig,
+                      rate: newRate,
+                      label: isDefaultLabel ? `Plus: ${newRate}% Vat` : vatConfig.label,
+                    });
+                  }}
+                  className="w-full p-1.5 border border-gray-300 rounded text-xs font-mono font-bold"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">
+                  VAT Row Label on PDF
+                </label>
+                <input
+                  type="text"
+                  value={vatConfig.label ?? `Plus: ${vatConfig.rate}% Vat`}
+                  onChange={(e) =>
+                    updateField('vatConfig', { ...vatConfig, label: e.target.value })
+                  }
+                  placeholder="Plus: 12% Vat"
+                  className="w-full p-1.5 border border-gray-300 rounded text-xs"
+                />
+              </div>
+              <div>
+                <label className="flex items-center justify-between text-[10px] font-bold text-gray-500 uppercase mb-1">
+                  <span>VAT Amount (PHP)</span>
+                  <label className="flex items-center gap-1 normal-case text-amber-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(vatConfig.isManualAmount)}
+                      onChange={(e) =>
+                        updateField('vatConfig', {
+                          ...vatConfig,
+                          isManualAmount: e.target.checked,
+                          manualAmount: e.target.checked
+                            ? vatConfig.manualAmount ?? summary.vatAmount
+                            : undefined,
+                        })
+                      }
+                      className="w-3 h-3 text-amber-600 rounded"
+                    />
+                    <span>Manual Edit</span>
+                  </label>
+                </label>
+                {vatConfig.isManualAmount ? (
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={vatConfig.manualAmount ?? ''}
+                    onChange={(e) =>
+                      updateField('vatConfig', {
+                        ...vatConfig,
+                        manualAmount: parseFloat(e.target.value) || 0,
+                      })
+                    }
+                    className="w-full p-1.5 border border-amber-400 bg-amber-50/40 rounded text-xs font-mono font-bold"
+                  />
+                ) : (
+                  <div className="p-1.5 text-xs font-mono font-bold text-gray-800 bg-gray-100 rounded border border-gray-200">
+                    {formatPHP(summary.vatAmount)}
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="md:col-span-2">
+                <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">
+                  Exempt Row Label on PDF
+                </label>
+                <input
+                  type="text"
+                  value={vatConfig.label ?? 'VAT Exempt'}
+                  onChange={(e) =>
+                    updateField('vatConfig', { ...vatConfig, label: e.target.value })
+                  }
+                  placeholder="VAT Exempt"
+                  className="w-full p-1.5 border border-gray-300 rounded text-xs"
+                />
+              </div>
+              <div className="flex items-end pb-1">
+                <label className="flex items-center gap-2 text-xs font-semibold text-gray-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={vatConfig.showZeroVatRow !== false}
+                    onChange={(e) =>
+                      updateField('vatConfig', {
+                        ...vatConfig,
+                        showZeroVatRow: e.target.checked,
+                      })
+                    }
+                    className="w-4 h-4 text-amber-600 rounded border-gray-300"
+                  />
+                  <span>Show VAT row (PHP 0.00) on PDF</span>
+                </label>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Item-level VAT status summary when VAT is enabled */}
+        {vatConfig.enabled && quote.items.length > 0 && (
+          <div className="pt-2 border-t border-gray-100 text-[11px] text-gray-600 flex flex-wrap items-center justify-between gap-2">
+            <span>
+              Taxable Base:{' '}
+              <strong className="font-mono text-gray-900">{formatPHP(summary.taxableBase)}</strong>{' '}
+              <span className="text-gray-400">
+                (use the &quot;VAT&quot; checkboxes on individual items above to exempt specific items)
+              </span>
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Financial Summary Card */}
@@ -1165,7 +1613,11 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({
 
           {summary.deliveryAmount > 0 && (
             <div className="flex justify-between text-blue-300">
-              <span>Delivery Charges:</span>
+              <span>
+                {quote.delivery.mode === 'pickup'
+                  ? 'Packaging & Loading Fee:'
+                  : 'Delivery Charges:'}
+              </span>
               <span className="font-mono">{formatPHP(summary.deliveryAmount)}</span>
             </div>
           )}
@@ -1175,10 +1627,16 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({
             <span className="font-mono">{formatPHP(summary.totalBeforeVat)}</span>
           </div>
 
-          <div className="flex justify-between text-amber-300/90 font-semibold">
-            <span>Plus: 12% Vat:</span>
-            <span className="font-mono">{formatPHP(summary.vatAmount)}</span>
-          </div>
+          {(vatConfig.enabled || vatConfig.showZeroVatRow !== false) && (
+            <div className="flex justify-between text-amber-300/90 font-semibold">
+              <span>
+                {vatConfig.label ||
+                  (vatConfig.enabled ? `Plus: ${vatConfig.rate}% Vat` : 'VAT Exempt')}
+                :
+              </span>
+              <span className="font-mono">{formatPHP(summary.vatAmount)}</span>
+            </div>
+          )}
 
           <div className="border-t-2 border-amber-500/60 pt-2.5 flex justify-between text-sm md:text-base font-extrabold text-amber-400">
             <span>GRAND TOTAL CONTRACT PRICE:</span>
@@ -1293,49 +1751,46 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({
               </div>
             </div>
 
-            {/* Editable Terms & Conditions Page 1 */}
-            <div className="space-y-1.5 pt-2 border-t border-gray-200">
-              <div className="flex items-center justify-between">
-                <label className="font-bold text-gray-700">
-                  Terms & Conditions — Page 1 (Sections I & II)
-                </label>
-                <button
-                  type="button"
-                  onClick={() => updateField('termsPage1', DEFAULT_TERMS_PAGE_1)}
-                  className="text-[11px] text-amber-700 hover:text-amber-800 font-semibold flex items-center gap-1"
-                >
-                  <RotateCcw className="w-3 h-3" /> Reset to Default
-                </button>
+            {/* Global Terms Font Size Control */}
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-gray-200 bg-white p-3 rounded-lg border border-gray-200">
+              <div>
+                <p className="font-bold text-gray-800 text-xs">
+                  Default Terms &amp; Conditions Font Size
+                </p>
+                <p className="text-[11px] text-gray-500">
+                  Sets the base font size across both Terms pages (you can also resize selected text individually below)
+                </p>
               </div>
-              <textarea
-                rows={12}
-                value={quote.termsPage1 ?? DEFAULT_TERMS_PAGE_1}
-                onChange={(e) => updateField('termsPage1', e.target.value)}
-                className="w-full p-2.5 border border-gray-300 rounded-lg bg-white text-xs font-sans leading-relaxed focus:ring-2 focus:ring-amber-500 focus:outline-none"
-              />
+              <select
+                value={quote.termsFontSize ?? 9.2}
+                onChange={(e) => updateField('termsFontSize', parseFloat(e.target.value) || 9.2)}
+                className="p-1.5 px-2.5 border border-gray-300 rounded-lg text-xs font-semibold bg-white focus:ring-2 focus:ring-amber-500"
+              >
+                {TERMS_FONT_SIZE_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
             </div>
 
-            {/* Editable Terms & Conditions Page 2 */}
-            <div className="space-y-1.5 pt-2 border-t border-gray-200">
-              <div className="flex items-center justify-between">
-                <label className="font-bold text-gray-700">
-                  Terms & Conditions — Page 2 (Sections C, D, III & IV)
-                </label>
-                <button
-                  type="button"
-                  onClick={() => updateField('termsPage2', DEFAULT_TERMS_PAGE_2)}
-                  className="text-[11px] text-amber-700 hover:text-amber-800 font-semibold flex items-center gap-1"
-                >
-                  <RotateCcw className="w-3 h-3" /> Reset to Default
-                </button>
-              </div>
-              <textarea
-                rows={12}
-                value={quote.termsPage2 ?? DEFAULT_TERMS_PAGE_2}
-                onChange={(e) => updateField('termsPage2', e.target.value)}
-                className="w-full p-2.5 border border-gray-300 rounded-lg bg-white text-xs font-sans leading-relaxed focus:ring-2 focus:ring-amber-500 focus:outline-none"
-              />
-            </div>
+            {/* Rich-Text Terms & Conditions Page 1 */}
+            <RichTextTermsEditor
+              label="Terms & Conditions — Page 1 (Sections I & II)"
+              value={quote.termsPage1 ?? quote.termsAndConditions ?? DEFAULT_TERMS_PAGE_1}
+              baseFontSizePt={quote.termsFontSize ?? 9.2}
+              onChange={(html) => updateField('termsPage1', html)}
+              onReset={() => updateField('termsPage1', DEFAULT_TERMS_PAGE_1)}
+            />
+
+            {/* Rich-Text Terms & Conditions Page 2 */}
+            <RichTextTermsEditor
+              label="Terms & Conditions — Page 2 (Sections C, D, III & IV)"
+              value={quote.termsPage2 ?? DEFAULT_TERMS_PAGE_2}
+              baseFontSizePt={quote.termsFontSize ?? 9.2}
+              onChange={(html) => updateField('termsPage2', html)}
+              onReset={() => updateField('termsPage2', DEFAULT_TERMS_PAGE_2)}
+            />
           </div>
         )}
       </div>

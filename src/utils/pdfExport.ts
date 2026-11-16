@@ -1,7 +1,7 @@
 import jsPDF from 'jspdf';
 import { QuotationData, DEFAULT_TERMS_PAGE_1, DEFAULT_TERMS_PAGE_2 } from './storage';
 import { calculateQuotationSummary, formatPHP, QuotationLineItem } from './pricingCalculator';
-import { parseTermsText, FormattedTermsLine } from './termsFormatter';
+import { parseTermsText, FormattedTermsLine, RichTextRun } from './termsFormatter';
 
 /**
  * Triggers browser native print dialog with pre-configured print styling
@@ -33,11 +33,6 @@ async function loadImageDataUrl(url: string): Promise<{ dataUrl: string; width: 
   return { dataUrl, width: img.naturalWidth, height: img.naturalHeight };
 }
 
-interface RichTextRun {
-  text: string;
-  bold?: boolean;
-}
-
 /**
  * Normalizes Unicode punctuation to WinAnsi-safe equivalents for built-in PDF fonts
  */
@@ -51,7 +46,7 @@ function sanitizePdfText(str: string = ''): string {
 }
 
 /**
- * Renders a paragraph with mixed bold/normal runs and automatic line wrapping
+ * Renders a paragraph with mixed bold/italic/underline/size runs and automatic line wrapping
  */
 function renderMixedParagraph(
   doc: jsPDF,
@@ -60,24 +55,41 @@ function renderMixedParagraph(
   y: number,
   maxWidth: number,
   lineHeight: number,
-  fontSize: number = 9.2
+  defaultFontSize: number = 9.2
 ): number {
-  doc.setFontSize(fontSize);
+  if (runs.length === 0 || runs.every((r) => !r.text.trim())) {
+    return y + lineHeight * 0.65;
+  }
 
-  // Tokenize runs into words preserving bold state and spaces
-  const tokens: { word: string; bold: boolean }[] = [];
+  // Tokenize runs into words preserving bold/italic/underline/size state and spaces
+  const tokens: {
+    word: string;
+    bold: boolean;
+    italic: boolean;
+    underline: boolean;
+    fontSize: number;
+  }[] = [];
+
   for (const run of runs) {
     const sanitized = sanitizePdfText(run.text);
     const parts = sanitized.split(/(\s+)/);
+    const runSize = run.fontSizePt ?? defaultFontSize;
     for (const part of parts) {
       if (part.length > 0) {
-        tokens.push({ word: part, bold: !!run.bold });
+        tokens.push({
+          word: part,
+          bold: !!run.bold,
+          italic: !!run.italic,
+          underline: !!run.underline,
+          fontSize: runSize,
+        });
       }
     }
   }
 
   let cursorX = x;
   let cursorY = y;
+  let currentLineMaxSize = defaultFontSize;
 
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
@@ -88,19 +100,45 @@ function renderMixedParagraph(
       continue;
     }
 
-    doc.setFont('helvetica', token.bold ? 'bold' : 'normal');
+    const fontStyle =
+      token.bold && token.italic
+        ? 'bolditalic'
+        : token.bold
+        ? 'bold'
+        : token.italic
+        ? 'italic'
+        : 'normal';
+
+    doc.setFont('helvetica', fontStyle);
+    doc.setFontSize(token.fontSize);
     const tokenWidth = doc.getTextWidth(token.word);
 
     if (!isWhitespace && cursorX + tokenWidth > x + maxWidth && cursorX > x) {
       cursorX = x;
-      cursorY += lineHeight;
+      cursorY += Math.max(lineHeight, currentLineMaxSize * 0.48);
+      currentLineMaxSize = token.fontSize;
+    } else {
+      currentLineMaxSize = Math.max(currentLineMaxSize, token.fontSize);
     }
 
     doc.text(token.word, cursorX, cursorY);
+
+    if (token.underline) {
+      const nextToken = tokens[i + 1];
+      const skipTrailingSpaceUnderline = isWhitespace && (!nextToken || !nextToken.underline);
+      if (!skipTrailingSpaceUnderline) {
+        doc.setDrawColor(20, 20, 20);
+        doc.setLineWidth(Math.max(0.2, token.fontSize * 0.025));
+        const underlineY = cursorY + Math.max(0.5, token.fontSize * 0.07);
+        doc.line(cursorX, underlineY, cursorX + tokenWidth, underlineY);
+      }
+    }
+
     cursorX += tokenWidth;
   }
 
-  return cursorY + lineHeight;
+  doc.setFontSize(defaultFontSize);
+  return cursorY + Math.max(lineHeight, currentLineMaxSize * 0.48);
 }
 
 /**
@@ -112,33 +150,30 @@ function renderFormattedTermsToPdf(
   startX: number,
   startY: number,
   maxWidth: number,
-  lineHeight: number = 4.6
+  baseFontSizePt: number = 9.2
 ): number {
   let ty = startY;
+  const lineHeight = Math.max(4.0, baseFontSizePt * 0.5);
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
     if (line.type === 'roman-header') {
       if (i > 0) ty += 1.4;
-      pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(10.5);
-      const text = sanitizePdfText(line.runs.map((r) => r.text).join(''));
-      pdf.text(text, startX, ty);
-      ty += 5.0;
+      const headerSize = line.fontSizePt ?? baseFontSizePt + 1.3;
+      const headerRuns = line.runs.map((r) => ({ ...r, bold: r.bold !== false }));
+      ty = renderMixedParagraph(pdf, headerRuns, startX, ty, maxWidth, 5.0, headerSize);
     } else if (line.type === 'letter-header') {
       if (i > 0) ty += 1.0;
-      pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(9.5);
-      const text = sanitizePdfText(line.runs.map((r) => r.text).join(''));
-      pdf.text(text, startX, ty);
-      ty += lineHeight;
+      const subSize = line.fontSizePt ?? baseFontSizePt + 0.3;
+      const subRuns = line.runs.map((r) => ({ ...r, bold: r.bold !== false }));
+      ty = renderMixedParagraph(pdf, subRuns, startX, ty, maxWidth, lineHeight, subSize);
     } else {
       const firstText = line.runs[0]?.text || '';
       if (/^\d+\.\s+/.test(firstText) && i > 0) {
         ty += 0.4;
       }
-      ty = renderMixedParagraph(pdf, line.runs, startX, ty, maxWidth, lineHeight, 9.2);
+      ty = renderMixedParagraph(pdf, line.runs, startX, ty, maxWidth, lineHeight, baseFontSizePt);
     }
   }
 
@@ -218,7 +253,18 @@ export async function downloadQuotationPdf(
     compress: true,
   });
 
-  const summary = calculateQuotationSummary(quote.items, quote.discount, quote.delivery);
+  const vatConfig = quote.vatConfig || {
+    enabled: true,
+    rate: 12,
+    label: 'Plus: 12% Vat',
+    showZeroVatRow: true,
+  };
+  const summary = calculateQuotationSummary(
+    quote.items,
+    quote.discount,
+    quote.delivery,
+    vatConfig
+  );
 
   // Split items across pages if more than 5 items
   const needsTwoTablePages = quote.items.length > 5;
@@ -526,17 +572,24 @@ export async function downloadQuotationPdf(
     pdf.text(formatPHP(summary.totalBeforeVat), col4X + col4W / 2, curY + 3.4, { align: 'center' });
     curY += sumRowH;
 
-    // 4. Plus: 12% Vat Row
-    pdf.rect(tableX, curY, tableW, sumRowH);
-    pdf.line(col2X, curY, col2X, curY + sumRowH);
-    pdf.line(col3X, curY, col3X, curY + sumRowH);
-    pdf.line(col4X, curY, col4X, curY + sumRowH);
+    // 4. Plus: VAT / VAT Exempt Row
+    if (vatConfig.enabled || vatConfig.showZeroVatRow !== false) {
+      pdf.rect(tableX, curY, tableW, sumRowH);
+      pdf.line(col2X, curY, col2X, curY + sumRowH);
+      pdf.line(col3X, curY, col3X, curY + sumRowH);
+      pdf.line(col4X, curY, col4X, curY + sumRowH);
 
-    pdf.setFont('helvetica', 'normal');
-    pdf.setFontSize(9.5);
-    pdf.text('Plus: 12% Vat', col1X + col1W / 2, curY + 3.4, { align: 'center' });
-    pdf.text(formatPHP(summary.vatAmount), col4X + col4W / 2, curY + 3.4, { align: 'center' });
-    curY += sumRowH;
+      const vatLabel = sanitizePdfText(
+        vatConfig.label ||
+          (vatConfig.enabled ? `Plus: ${vatConfig.rate}% Vat` : 'VAT Exempt')
+      );
+
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(9.5);
+      pdf.text(vatLabel, col1X + col1W / 2, curY + 3.4, { align: 'center' });
+      pdf.text(formatPHP(summary.vatAmount), col4X + col4W / 2, curY + 3.4, { align: 'center' });
+      curY += sumRowH;
+    }
 
     // 5. GRAND TOTAL CONTRACT PRICE Row
     const grandRowH = 5.0;
@@ -612,12 +665,14 @@ export async function downloadQuotationPdf(
 
   const termsX = 26;
   const termsMaxW = 166;
-  const lh = 4.6;
+  const baseTermsPt = quote.termsFontSize ?? 9.2;
+  const lh = Math.max(4.0, baseTermsPt * 0.5);
 
   const parsedPage1 = parseTermsText(
-    quote.termsPage1 ?? quote.termsAndConditions ?? DEFAULT_TERMS_PAGE_1
+    quote.termsPage1 ?? quote.termsAndConditions ?? DEFAULT_TERMS_PAGE_1,
+    baseTermsPt
   );
-  renderFormattedTermsToPdf(pdf, parsedPage1, termsX, 23, termsMaxW, lh);
+  renderFormattedTermsToPdf(pdf, parsedPage1, termsX, 23, termsMaxW, baseTermsPt);
 
   // =========================================================================
   // TERMS & SIGNATURES: Page 2 of Terms + Payment Details + Signatures
@@ -626,8 +681,8 @@ export async function downloadQuotationPdf(
   currentPage++;
   drawPageTemplate(currentPage);
 
-  const parsedPage2 = parseTermsText(quote.termsPage2 ?? DEFAULT_TERMS_PAGE_2);
-  let ty = renderFormattedTermsToPdf(pdf, parsedPage2, termsX, 23, termsMaxW, lh);
+  const parsedPage2 = parseTermsText(quote.termsPage2 ?? DEFAULT_TERMS_PAGE_2, baseTermsPt);
+  let ty = renderFormattedTermsToPdf(pdf, parsedPage2, termsX, 23, termsMaxW, baseTermsPt);
 
   // V. Payment Details
   ty += 1.5;

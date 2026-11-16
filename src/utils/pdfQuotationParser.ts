@@ -322,7 +322,7 @@ export async function parseExistingQuotationPdf(
       const nextLine = col1Lines[i + 1];
 
       const isDiscount = /discount/i.test(line.text);
-      const isDelivery = /^•\s*(For Delivery|Delivered to|Delivery)/i.test(line.text);
+      const isDelivery = /^•\s*(For Delivery|Delivered to|Delivery|For Paver Packaging)/i.test(line.text);
       const prevWasColor = prevLine && /^•\s*Color\s*:/i.test(prevLine.text);
       const nextIsPcsSqm = nextLine && /pcs\/sqm/i.test(nextLine.text);
       const largeGap = prevLine && prevLine.y - line.y > 20;
@@ -379,13 +379,15 @@ export async function parseExistingQuotationPdf(
         continue;
       }
 
-      // 2. Check if Delivery Row
+      // 2. Check if Delivery / Pickup Packaging Row
       if (
-        /^•\s*(For Delivery|Delivered to|Delivery)/i.test(fullBlockText) ||
+        /^•\s*(For Delivery|Delivered to|Delivery|For Paver Packaging)/i.test(fullBlockText) ||
         /Deliver(?:y|ies)/i.test(col2)
       ) {
+        const isPickupRow = /packaging|loading fee/i.test(fullBlockText);
         delivery = {
           enabled: true,
+          mode: isPickupRow ? 'pickup' : 'delivery',
           description: fullBlockText.trim(),
           deliveriesCount: col2.trim(),
           amount: parsePhpAmount(col4),

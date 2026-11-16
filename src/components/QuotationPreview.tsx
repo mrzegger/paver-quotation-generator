@@ -10,7 +10,18 @@ interface QuotationPreviewProps {
 }
 
 export const QuotationPreview: React.FC<QuotationPreviewProps> = ({ quote, scale = 1 }) => {
-  const summary = calculateQuotationSummary(quote.items, quote.discount, quote.delivery);
+  const vatConfig = quote.vatConfig || {
+    enabled: true,
+    rate: 12,
+    label: 'Plus: 12% Vat',
+    showZeroVatRow: true,
+  };
+  const summary = calculateQuotationSummary(
+    quote.items,
+    quote.discount,
+    quote.delivery,
+    vatConfig
+  );
 
   // Split items across pages if more than 5 items
   const needsTwoTablePages = quote.items.length > 5;
@@ -19,38 +30,53 @@ export const QuotationPreview: React.FC<QuotationPreviewProps> = ({ quote, scale
 
   const totalPages = needsTwoTablePages ? 4 : 3;
 
+  const baseTermsPt = quote.termsFontSize ?? 9.2;
   const parsedTermsPage1 = parseTermsText(
-    quote.termsPage1 ?? quote.termsAndConditions ?? DEFAULT_TERMS_PAGE_1
+    quote.termsPage1 ?? quote.termsAndConditions ?? DEFAULT_TERMS_PAGE_1,
+    baseTermsPt
   );
-  const parsedTermsPage2 = parseTermsText(quote.termsPage2 ?? DEFAULT_TERMS_PAGE_2);
+  const parsedTermsPage2 = parseTermsText(quote.termsPage2 ?? DEFAULT_TERMS_PAGE_2, baseTermsPt);
+
+  const renderRunSpan = (r: { text: string; bold?: boolean; italic?: boolean; underline?: boolean; fontSizePt?: number }, i: number, fallbackPt: number) => {
+    const pt = r.fontSizePt ?? fallbackPt;
+    const px = Math.round(pt * 1.2 * 10) / 10;
+    return (
+      <span
+        key={i}
+        style={{ fontSize: `${px}px` }}
+        className={`${r.bold ? 'font-bold' : 'font-normal'} ${r.italic ? 'italic' : ''} ${
+          r.underline ? 'underline' : ''
+        }`}
+      >
+        {r.text}
+      </span>
+    );
+  };
 
   const renderFormattedTermsLines = (lines: FormattedTermsLine[]) =>
     lines.map((line, idx) => {
+      if (line.runs.every((r) => !r.text.trim())) {
+        return <div key={idx} className="h-2.5" />;
+      }
       if (line.type === 'roman-header') {
+        const headerPt = line.fontSizePt ?? baseTermsPt + 1.3;
         return (
-          <h3 key={idx} className="font-bold text-[12.5px] mt-1.5 mb-0.5 text-gray-900">
-            {line.runs.map((r, i) => (
-              <span key={i}>{r.text}</span>
-            ))}
+          <h3 key={idx} className="font-bold mt-1.5 mb-0.5 text-gray-900">
+            {line.runs.map((r, i) => renderRunSpan(r, i, headerPt))}
           </h3>
         );
       }
       if (line.type === 'letter-header') {
+        const subHeaderPt = line.fontSizePt ?? baseTermsPt + 0.3;
         return (
-          <p key={idx} className="font-bold text-[11.5px] mt-1 text-gray-900">
-            {line.runs.map((r, i) => (
-              <span key={i}>{r.text}</span>
-            ))}
+          <p key={idx} className="font-bold mt-1 text-gray-900">
+            {line.runs.map((r, i) => renderRunSpan(r, i, subHeaderPt))}
           </p>
         );
       }
       return (
-        <p key={idx} className="text-[11px] leading-[1.42] text-gray-900">
-          {line.runs.map((r, i) => (
-            <span key={i} className={r.bold ? 'font-bold' : 'font-normal'}>
-              {r.text}
-            </span>
-          ))}
+        <p key={idx} className="leading-[1.42] text-gray-900">
+          {line.runs.map((r, i) => renderRunSpan(r, i, baseTermsPt))}
         </p>
       );
     });
@@ -145,13 +171,18 @@ export const QuotationPreview: React.FC<QuotationPreviewProps> = ({ quote, scale
         <td className="py-0.5 px-2 text-center">{formatPHP(summary.totalBeforeVat)}</td>
       </tr>
 
-      {/* Plus 12% VAT */}
-      <tr className="border-b border-black text-[11.5px]">
-        <td className="border-r border-black py-0.5 px-2 text-center font-normal">Plus: 12% Vat</td>
-        <td className="border-r border-black"></td>
-        <td className="border-r border-black"></td>
-        <td className="py-0.5 px-2 text-center font-normal">{formatPHP(summary.vatAmount)}</td>
-      </tr>
+      {/* Plus VAT / VAT Exempt */}
+      {(vatConfig.enabled || vatConfig.showZeroVatRow !== false) && (
+        <tr className="border-b border-black text-[11.5px]">
+          <td className="border-r border-black py-0.5 px-2 text-center font-normal">
+            {vatConfig.label ||
+              (vatConfig.enabled ? `Plus: ${vatConfig.rate}% Vat` : 'VAT Exempt')}
+          </td>
+          <td className="border-r border-black"></td>
+          <td className="border-r border-black"></td>
+          <td className="py-0.5 px-2 text-center font-normal">{formatPHP(summary.vatAmount)}</td>
+        </tr>
+      )}
 
       {/* Grand Total Contract Price */}
       <tr className="border-b border-black text-[11.5px] font-bold">

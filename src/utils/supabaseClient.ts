@@ -74,6 +74,15 @@ export async function signOutUser() {
 // =============================================================================
 
 export function mapDbRecordToQuotation(rec: any): QuotationData {
+  const rawDiscount = rec.discount || {
+    enabled: false,
+    type: 'percentage',
+    value: 0,
+    amount: 0,
+    label: '',
+  };
+  const { _vatConfig, _termsFontSize, ...cleanDiscount } = rawDiscount;
+
   return {
     id: rec.id,
     quotationNumber: rec.quotation_number,
@@ -84,19 +93,20 @@ export function mapDbRecordToQuotation(rec: any): QuotationData {
     projectLocation: rec.project_location || '',
     tableHeaderTitle: rec.table_header_title || 'Paver (Delivered)',
     items: rec.items || [],
-    discount: rec.discount || {
-      enabled: false,
-      type: 'percentage',
-      value: 0,
-      amount: 0,
-      label: '',
-    },
+    discount: cleanDiscount,
     delivery: rec.delivery || {
       enabled: false,
       description: '',
       deliveriesCount: '',
       amount: 0,
     },
+    vatConfig: rec.vat_config || _vatConfig || {
+      enabled: true,
+      rate: 12,
+      label: 'Plus: 12% Vat',
+      showZeroVatRow: true,
+    },
+    termsFontSize: rec.terms_font_size || _termsFontSize || 9.2,
     termsAndConditions: rec.terms_page1 || '',
     termsPage1: rec.terms_page1 || '',
     termsPage2: rec.terms_page2 || '',
@@ -153,7 +163,11 @@ export async function saveCloudQuotation(
     project_location: quote.projectLocation,
     table_header_title: quote.tableHeaderTitle || 'Paver (Delivered)',
     items: quote.items,
-    discount: quote.discount,
+    discount: {
+      ...quote.discount,
+      _vatConfig: quote.vatConfig,
+      _termsFontSize: quote.termsFontSize,
+    },
     delivery: quote.delivery,
     terms_page1: quote.termsPage1,
     terms_page2: quote.termsPage2,

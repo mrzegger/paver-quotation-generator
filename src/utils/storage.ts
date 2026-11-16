@@ -1,4 +1,4 @@
-import { QuotationLineItem, QuotationDiscount, QuotationDelivery } from './pricingCalculator';
+import { QuotationLineItem, QuotationDiscount, QuotationDelivery, QuotationVatConfig } from './pricingCalculator';
 import { PaverItem, INITIAL_PAVER_CATALOG } from '../data/paverCatalog';
 
 export interface QuotationData {
@@ -13,6 +13,8 @@ export interface QuotationData {
   items: QuotationLineItem[];
   discount: QuotationDiscount;
   delivery: QuotationDelivery;
+  vatConfig?: QuotationVatConfig;
+  termsFontSize?: number; // base font size in pt for Terms & Conditions (default 9.2)
   termsAndConditions: string; // legacy fallback
   termsPage1: string;
   termsPage2: string;

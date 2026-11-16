@@ -37,6 +37,7 @@ export interface QuotationLineItem {
   unitPriceVatInc?: number;
   unitPriceNonVat: number;
   totalNonVat: number;
+  vatApplicable?: boolean; // default true
 }
 
 export interface QuotationDiscount {
@@ -49,9 +50,21 @@ export interface QuotationDiscount {
 
 export interface QuotationDelivery {
   enabled: boolean;
-  description: string; // e.g. "• For Delivery - Loading courtesy of Kuma - Pallet Packaging Included (suggested x4 25Ton & 3x 20Ton)"
+  mode?: 'delivery' | 'pickup'; // default 'delivery'
+  description: string; // e.g. "• For Delivery to <Location>" or "• For Paver Packaging (Pallets and Wrapping) and Loading Fee"
+  isCustomDescription?: boolean;
   deliveriesCount?: string; // e.g. "2 Deliveries" or blank
   amount: number;
+  vatApplicable?: boolean; // default true
+}
+
+export interface QuotationVatConfig {
+  enabled: boolean; // false = VAT Exempt (0%)
+  rate: number; // default 12 (%)
+  label?: string; // e.g. "Plus: 12% Vat" or "VAT Exempt"
+  isManualAmount?: boolean;
+  manualAmount?: number;
+  showZeroVatRow?: boolean; // default true
 }
 
 export interface QuotationSummary {
@@ -59,9 +72,18 @@ export interface QuotationSummary {
   customSubtotal: number;
   discountAmount: number; // negative or 0
   deliveryAmount: number;
+  taxableBase: number;
   totalBeforeVat: number; // "Total Amount"
   vatAmount: number; // "Plus: 12% Vat"
   grandTotal: number; // "GRAND TOTAL CONTRACT PRICE"
+}
+
+export const DEFAULT_PICKUP_DESCRIPTION =
+  '• For Paver Packaging (Pallets and Wrapping) and Loading Fee';
+
+export function getDefaultDeliveryDescription(projectLocation?: string): string {
+  const loc = (projectLocation || '').trim();
+  return loc ? `• For Delivery to ${loc}` : '• For Delivery to ';
 }
 
 export const COLOR_SURCHARGE_PER_SQM = 300.00; // PHP 300.00/sqm added to non-vat price
@@ -177,16 +199,23 @@ export function piecesToSqm(pieces: number, pcsPerSqm: number): number {
 export function calculateQuotationSummary(
   items: QuotationLineItem[],
   discount: QuotationDiscount,
-  delivery: QuotationDelivery
+  delivery: QuotationDelivery,
+  vatConfig?: QuotationVatConfig
 ): QuotationSummary {
   let paversSubtotal = 0;
   let customSubtotal = 0;
+  let taxablePaversSubtotal = 0;
+  let taxableCustomSubtotal = 0;
 
   for (const item of items) {
+    const itemTotal = item.totalNonVat || 0;
+    const isVat = item.vatApplicable !== false;
     if (item.type === 'paver') {
-      paversSubtotal += item.totalNonVat || 0;
+      paversSubtotal += itemTotal;
+      if (isVat) taxablePaversSubtotal += itemTotal;
     } else if (item.type === 'custom') {
-      customSubtotal += item.totalNonVat || 0;
+      customSubtotal += itemTotal;
+      if (isVat) taxableCustomSubtotal += itemTotal;
     }
   }
 
@@ -200,13 +229,35 @@ export function calculateQuotationSummary(
     }
   }
 
+  const taxableDiscount =
+    paversSubtotal > 0 ? discountAmount * (taxablePaversSubtotal / paversSubtotal) : 0;
+
   const deliveryAmount = delivery.enabled ? (delivery.amount || 0) : 0;
+  const taxableDelivery =
+    delivery.enabled && delivery.vatApplicable !== false ? (delivery.amount || 0) : 0;
 
   // Subtotal before VAT (Total Amount)
-  const totalBeforeVat = Math.round((paversSubtotal - discountAmount + customSubtotal + deliveryAmount) * 100) / 100;
-  
-  // 12% VAT
-  const vatAmount = Math.round(totalBeforeVat * 0.12 * 100) / 100;
+  const totalBeforeVat =
+    Math.round((paversSubtotal - discountAmount + customSubtotal + deliveryAmount) * 100) / 100;
+
+  const taxableBase = Math.max(
+    0,
+    Math.round(
+      (taxablePaversSubtotal - taxableDiscount + taxableCustomSubtotal + taxableDelivery) * 100
+    ) / 100
+  );
+
+  const vatEnabled = vatConfig ? vatConfig.enabled : true;
+  const vatRate = vatConfig?.rate ?? 12;
+
+  let vatAmount = 0;
+  if (vatEnabled) {
+    if (vatConfig?.isManualAmount) {
+      vatAmount = Math.round((vatConfig.manualAmount || 0) * 100) / 100;
+    } else {
+      vatAmount = Math.round(taxableBase * (vatRate / 100) * 100) / 100;
+    }
+  }
 
   // Grand Total Contract Price
   const grandTotal = Math.round((totalBeforeVat + vatAmount) * 100) / 100;
@@ -216,6 +267,7 @@ export function calculateQuotationSummary(
     customSubtotal: Math.round(customSubtotal * 100) / 100,
     discountAmount: Math.round(discountAmount * 100) / 100,
     deliveryAmount: Math.round(deliveryAmount * 100) / 100,
+    taxableBase,
     totalBeforeVat,
     vatAmount,
     grandTotal

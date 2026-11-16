@@ -40,6 +40,7 @@ import { ReferenceDock } from './components/ReferenceDock';
 import { AuthModal } from './components/AuthModal';
 import { printQuotation, downloadQuotationPdf, getQuotationPdfFilename } from './utils/pdfExport';
 import { convertParsedItemToLineItem } from './utils/requestParser';
+import { getDefaultDeliveryDescription } from './utils/pricingCalculator';
 import { 
   supabase, 
   isSupabaseConfigured, 
@@ -95,10 +96,20 @@ export function App() {
       },
       delivery: {
         enabled: false,
-        description: '• For Delivery - Loading courtesy of Kuma - Pallet Packaging Included (suggested 20T Trucks)',
+        mode: 'delivery',
+        description: getDefaultDeliveryDescription(''),
+        isCustomDescription: false,
         deliveriesCount: '1 Delivery',
-        amount: 0
+        amount: 0,
+        vatApplicable: true
       },
+      vatConfig: {
+        enabled: true,
+        rate: 12,
+        label: 'Plus: 12% Vat',
+        showZeroVatRow: true
+      },
+      termsFontSize: 9.2,
       termsAndConditions: DEFAULT_TERMS_PAGE_1,
       termsPage1: DEFAULT_TERMS_PAGE_1,
       termsPage2: DEFAULT_TERMS_PAGE_2,
@@ -462,19 +473,38 @@ export function App() {
         <RequestImporter
           catalog={catalog}
           onApplyData={(data) => {
-            setCurrentQuote(prev => ({
-              ...prev,
-              quotationNumber: data.quotationNumber || prev.quotationNumber,
-              date: data.date || prev.date,
-              clientName: data.clientName !== undefined ? data.clientName : prev.clientName,
-              companyName: data.companyName !== undefined ? data.companyName : prev.companyName,
-              projectName: data.projectName || prev.projectName,
-              projectLocation: data.projectLocation || prev.projectLocation,
-              tableHeaderTitle: data.tableHeaderTitle || prev.tableHeaderTitle,
-              items: data.items.length > 0 ? data.items : prev.items,
-              discount: data.discount ? data.discount : prev.discount,
-              delivery: data.delivery ? data.delivery : prev.delivery
-            }));
+            setCurrentQuote(prev => {
+              const nextLocation = data.projectLocation || prev.projectLocation;
+              let nextDelivery = data.delivery ? { ...data.delivery } : { ...prev.delivery };
+
+              if (data.delivery) {
+                const descLower = (data.delivery.description || '').toLowerCase();
+                nextDelivery.mode = descLower.includes('packaging') || descLower.includes('loading fee')
+                  ? 'pickup'
+                  : 'delivery';
+                nextDelivery.isCustomDescription = true;
+              } else if (
+                data.projectLocation &&
+                nextDelivery.mode !== 'pickup' &&
+                !nextDelivery.isCustomDescription
+              ) {
+                nextDelivery.description = getDefaultDeliveryDescription(nextLocation);
+              }
+
+              return {
+                ...prev,
+                quotationNumber: data.quotationNumber || prev.quotationNumber,
+                date: data.date || prev.date,
+                clientName: data.clientName !== undefined ? data.clientName : prev.clientName,
+                companyName: data.companyName !== undefined ? data.companyName : prev.companyName,
+                projectName: data.projectName || prev.projectName,
+                projectLocation: nextLocation,
+                tableHeaderTitle: data.tableHeaderTitle || prev.tableHeaderTitle,
+                items: data.items.length > 0 ? data.items : prev.items,
+                discount: data.discount ? data.discount : prev.discount,
+                delivery: nextDelivery,
+              };
+            });
           }}
           onSetReferenceImage={(url) => {
             setReferenceImageUrl(url);
