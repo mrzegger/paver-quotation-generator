@@ -75,7 +75,7 @@ D. Limitations Of Proposal & Scope Adjustments
 2. Changed Site Conditions: This proposal excludes pre-identified areas exhibiting significant structural, subgrade, or environmental changes from the time of the initial site survey.
 3. Exclusions: Any item, scope, surface preparation, or trade coordination not explicitly listed in this written proposal is strictly excluded.
 III. Start-Up / Manufacturing Lead Time
-KUMA CONCRETE requires standard lead time to initiate production and dispatch following contract execution and receipt of the 50% downpayment. If requested concrete pavers or products are not currently in stock, a mandatory curing period of at least fourteen (14) calendar days is required prior to dispatch. Final project completion dates shall be established upon downpayment confirmation.
+KUMA CONCRETE requires standard lead time to initiate production and dispatch following contract execution and receipt of the 50% downpayment. If requested concrete pavers or products are not currently in stock, production schedules are subject to the prevailing production queue, followed by a mandatory curing period of at least fourteen (14) calendar days prior to dispatch. Final delivery or project completion dates shall be confirmed in writing upon downpayment confirmation.
 IV. Offer Validity
 This quotation is valid for thirty (30) calendar days from the date of issue. Conformity to this proposal does not obligate KUMA CONCRETE to performance bonds, retention terms, or liquidating damages unless explicitly negotiated and executed in a separate written agreement.`;
 

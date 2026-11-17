@@ -20,8 +20,10 @@ const INLINE_BOLD_PHRASES = [
   "strictly at the Client's sole expense",
   'strictly at the Client’s sole expense',
   'not delay or alter',
-  'at least fourteen (14) calendar days',
+  'subject to the prevailing production queue',
+  'mandatory curing period of at least fourteen (14) calendar days',
   'thirty (30) calendar days',
+  'KUMA CONCRETE',
 ];
 
 export function isHtmlTerms(text: string): boolean {
