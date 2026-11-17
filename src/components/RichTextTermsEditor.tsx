@@ -1,6 +1,10 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { Bold, Italic, Underline, List, RotateCcw, Type, RemoveFormatting } from 'lucide-react';
-import { termsTextToHtml } from '../utils/termsFormatter';
+import {
+  termsTextToHtml,
+  parseTermsText,
+  formattedLinesToHtml,
+} from '../utils/termsFormatter';
 
 interface RichTextTermsEditorProps {
   label: string;
@@ -41,11 +45,13 @@ export const RichTextTermsEditor: React.FC<RichTextTermsEditorProps> = ({
     const el = editorRef.current;
     if (!el) return;
 
-    const normalizedHtml = termsTextToHtml(value || '');
-    if (normalizedHtml !== lastEmittedHtmlRef.current && el.innerHTML !== normalizedHtml) {
+    if (value === lastEmittedHtmlRef.current) return;
+
+    const normalizedHtml = termsTextToHtml(value || '', true);
+    if (el.innerHTML !== normalizedHtml) {
       el.innerHTML = normalizedHtml;
-      lastEmittedHtmlRef.current = el.innerHTML;
     }
+    lastEmittedHtmlRef.current = el.innerHTML;
   }, [value]);
 
   const updateActiveFormats = () => {
@@ -147,6 +153,28 @@ export const RichTextTermsEditor: React.FC<RichTextTermsEditorProps> = ({
   const handleClearFormatting = () => {
     editorRef.current?.focus();
     document.execCommand('removeFormat', false);
+    emitChange();
+  };
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
+    const htmlData = e.clipboardData.getData('text/html');
+    const plainData = e.clipboardData.getData('text/plain');
+    if (!htmlData && !plainData) return;
+
+    e.preventDefault();
+    const rawSource = htmlData || plainData;
+    const isMultiLine = /\r?\n/.test(plainData) || /<\/?(div|p|li|br|h[1-6])\b/i.test(rawSource);
+    const hasCustomEditorSizes = htmlData.includes('data-font-size');
+
+    const lines = parseTermsText(rawSource).map((line) => ({
+      ...line,
+      runs: hasCustomEditorSizes
+        ? line.runs
+        : line.runs.map(({ fontSizePt: _drop, ...rest }) => rest),
+    }));
+
+    const cleanHtml = formattedLinesToHtml(lines, isMultiLine);
+    document.execCommand('insertHTML', false, cleanHtml);
     emitChange();
   };
 
@@ -275,6 +303,7 @@ export const RichTextTermsEditor: React.FC<RichTextTermsEditorProps> = ({
           contentEditable
           suppressContentEditableWarning
           onInput={emitChange}
+          onPaste={handlePaste}
           onKeyUp={updateActiveFormats}
           onMouseUp={updateActiveFormats}
           onBlur={emitChange}

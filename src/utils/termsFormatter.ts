@@ -31,11 +31,35 @@ export function isHtmlTerms(text: string): boolean {
   return /<\/?(b|strong|i|em|u|span|div|p|br|font|ul|ol|li|h[1-6])\b/i.test(text);
 }
 
+export function upgradeLegacySectionIII(rawText: string): string {
+  if (!rawText) return rawText;
+  const legacyRegex =
+    /If requested concrete pavers or products are not currently in stock,\s*a mandatory curing period of\s*(?:<\/?(?:b|strong)[^>]*>\s*)*at least fourteen \(14\) calendar days(?:\s*<\/(?:b|strong)>)*\s*is required prior to dispatch\.\s*Final project completion dates shall be established upon downpayment confirmation\./gi;
+
+  if (!legacyRegex.test(rawText)) return rawText;
+  legacyRegex.lastIndex = 0;
+
+  if (isHtmlTerms(rawText)) {
+    return rawText.replace(
+      legacyRegex,
+      'If requested concrete pavers or products are not currently in stock, production schedules are <b>subject to the prevailing production queue</b>, followed by a <b>mandatory curing period of at least fourteen (14) calendar days</b> prior to dispatch. Final delivery or project completion dates shall be confirmed in writing upon downpayment confirmation.'
+    );
+  }
+
+  return rawText.replace(
+    legacyRegex,
+    'If requested concrete pavers or products are not currently in stock, production schedules are subject to the prevailing production queue, followed by a mandatory curing period of at least fourteen (14) calendar days prior to dispatch. Final delivery or project completion dates shall be confirmed in writing upon downpayment confirmation.'
+  );
+}
+
 /**
- * Splits a text segment by known bold key phrases
+ * Splits a text segment by known bold key phrases while preserving inherited styling
  */
-function applyInlineBoldPhrases(text: string): RichTextRun[] {
-  let runs: RichTextRun[] = [{ text, bold: false }];
+function applyInlineBoldPhrases(
+  text: string,
+  baseStyle?: Omit<RichTextRun, 'text'>
+): RichTextRun[] {
+  let runs: RichTextRun[] = [{ ...baseStyle, text, bold: baseStyle?.bold ?? false }];
 
   for (const phrase of INLINE_BOLD_PHRASES) {
     const nextRuns: RichTextRun[] = [];
@@ -46,9 +70,9 @@ function applyInlineBoldPhrases(text: string): RichTextRun[] {
       }
       const parts = run.text.split(phrase);
       for (let i = 0; i < parts.length; i++) {
-        if (parts[i]) nextRuns.push({ text: parts[i], bold: false });
+        if (parts[i]) nextRuns.push({ ...run, text: parts[i], bold: false });
         if (i < parts.length - 1) {
-          nextRuns.push({ text: phrase, bold: true });
+          nextRuns.push({ ...run, text: phrase, bold: true });
         }
       }
     }
@@ -66,25 +90,49 @@ function escapeHtml(str: string): string {
 }
 
 /**
- * Converts plain terms text into clean HTML (with bold headers/clauses preserved)
- * for loading into the RichTextTermsEditor. If already HTML, returns as-is.
+ * Converts FormattedTermsLine[] back into clean rich-text HTML preserving bold, italic, underline, and custom font sizes.
  */
-export function termsTextToHtml(rawText: string): string {
-  if (!rawText) return '';
-  if (isHtmlTerms(rawText)) return rawText;
+export function formattedLinesToHtml(
+  lines: FormattedTermsLine[],
+  includeBlockDivs: boolean = true
+): string {
+  const renderRun = (r: RichTextRun) => {
+    let out = escapeHtml(r.text);
+    if (!out) return '';
+    if (r.fontSizePt) {
+      out = `<span style="font-size: ${r.fontSizePt}pt" data-font-size="${r.fontSizePt}pt">${out}</span>`;
+    }
+    if (r.underline) out = `<u>${out}</u>`;
+    if (r.italic) out = `<i>${out}</i>`;
+    if (r.bold) out = `<b>${out}</b>`;
+    return out;
+  };
 
-  const lines = parsePlainTermsText(rawText);
+  if (!includeBlockDivs && lines.length <= 1) {
+    return lines[0] ? lines[0].runs.map(renderRun).join('') : '';
+  }
+
   return lines
     .map((line) => {
-      const inner = line.runs
-        .map((r) => {
-          const escaped = escapeHtml(r.text);
-          return r.bold ? `<b>${escaped}</b>` : escaped;
-        })
-        .join('');
+      const inner = line.runs.map(renderRun).join('');
       return `<div>${inner || '<br>'}</div>`;
     })
     .join('');
+}
+
+/**
+ * Converts plain terms text (or unbolded/legacy HTML terms) into clean HTML
+ * with bold headers/clauses preserved for loading into the RichTextTermsEditor.
+ */
+export function termsTextToHtml(rawText: string, normalizeHtml: boolean = false): string {
+  if (!rawText) return '';
+  const upgraded = upgradeLegacySectionIII(rawText);
+  if (isHtmlTerms(upgraded)) {
+    if (!normalizeHtml) return upgraded;
+    return formattedLinesToHtml(parseHtmlTermsText(upgraded));
+  }
+
+  return formattedLinesToHtml(parsePlainTermsText(upgraded));
 }
 
 /**
@@ -192,6 +240,32 @@ const BLOCK_TAGS = new Set([
   'H6',
   'BLOCKQUOTE',
 ]);
+
+/**
+ * Applies bold to the first `prefixLen` characters across runs (e.g. for "1. Clause Title:")
+ */
+function boldPrefixInRuns(runs: RichTextRun[], prefixLen: number): RichTextRun[] {
+  const result: RichTextRun[] = [];
+  let offset = 0;
+
+  for (const run of runs) {
+    const end = offset + run.text.length;
+    if (offset >= prefixLen) {
+      result.push(run);
+    } else if (end <= prefixLen) {
+      result.push({ ...run, bold: true });
+    } else {
+      const splitIdx = prefixLen - offset;
+      const head = run.text.slice(0, splitIdx);
+      const tail = run.text.slice(splitIdx);
+      if (head) result.push({ ...run, text: head, bold: true });
+      if (tail) result.push({ ...run, text: tail });
+    }
+    offset = end;
+  }
+
+  return result;
+}
 
 /**
  * Parses HTML produced by RichTextTermsEditor into structured FormattedTermsLine array
@@ -358,24 +432,48 @@ function parseHtmlTermsText(html: string, baseFontSizePt?: number): FormattedTer
   }
 
   return rawLines.map((runs) => {
-    const plainLine = runs.map((r) => r.text).join('').trim();
+    // Apply inline bold phrases to any unbolded text runs
+    let enhancedRuns: RichTextRun[] = [];
+    for (const run of runs) {
+      if (run.bold) {
+        enhancedRuns.push(run);
+      } else {
+        enhancedRuns.push(
+          ...applyInlineBoldPhrases(run.text, {
+            italic: run.italic,
+            underline: run.underline,
+            fontSizePt: run.fontSizePt,
+          })
+        );
+      }
+    }
+
+    const plainLine = enhancedRuns.map((r) => r.text).join('').trim();
     if (/^(I|II|III|IV|V|VI)\.\s+/.test(plainLine)) {
       return {
         type: 'roman-header',
-        runs: runs.map((r) => ({ ...r, bold: r.bold !== false })),
+        runs: enhancedRuns.map((r) => ({ ...r, bold: r.bold !== false })),
         fontSizePt: baseFontSizePt ? baseFontSizePt + 1.3 : undefined,
       };
     }
     if (/^[A-Z]\.\s+/.test(plainLine)) {
       return {
         type: 'letter-header',
-        runs: runs.map((r) => ({ ...r, bold: r.bold !== false })),
+        runs: enhancedRuns.map((r) => ({ ...r, bold: r.bold !== false })),
         fontSizePt: baseFontSizePt ? baseFontSizePt + 0.3 : undefined,
       };
     }
+
+    // Apply colon-prefix bolding for numbered clauses or bullet labels (e.g. "1. Title:" or "• Delivered Orders:")
+    const rawJoined = enhancedRuns.map((r) => r.text).join('');
+    const colonMatch = rawJoined.match(/^(\s*(?:\d+\.|•)\s+[^:]+:)/);
+    if (colonMatch) {
+      enhancedRuns = boldPrefixInRuns(enhancedRuns, colonMatch[1].length);
+    }
+
     return {
       type: 'paragraph',
-      runs,
+      runs: enhancedRuns,
       fontSizePt: baseFontSizePt,
     };
   });
@@ -386,8 +484,9 @@ function parseHtmlTermsText(html: string, baseFontSizePt?: number): FormattedTer
  */
 export function parseTermsText(rawText: string, baseFontSizePt?: number): FormattedTermsLine[] {
   if (!rawText) return [];
-  if (isHtmlTerms(rawText)) {
-    return parseHtmlTermsText(rawText, baseFontSizePt);
+  const upgraded = upgradeLegacySectionIII(rawText);
+  if (isHtmlTerms(upgraded)) {
+    return parseHtmlTermsText(upgraded, baseFontSizePt);
   }
-  return parsePlainTermsText(rawText, baseFontSizePt);
+  return parsePlainTermsText(upgraded, baseFontSizePt);
 }
