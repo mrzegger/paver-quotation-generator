@@ -1,5 +1,51 @@
-import { QuotationLineItem, QuotationDiscount, QuotationDelivery, QuotationVatConfig } from './pricingCalculator';
+import {
+  QuotationLineItem,
+  QuotationDiscount,
+  QuotationDelivery,
+  QuotationVatConfig,
+  calculateQuotationSummary,
+} from './pricingCalculator';
 import { PaverItem, INITIAL_PAVER_CATALOG } from '../data/paverCatalog';
+
+export interface BillingPaymentEntry {
+  id: string;
+  date: string;
+  amount: number;
+  note?: string;
+}
+
+export interface BillingStatementData {
+  id: string;
+  billingNumber: string; // e.g. "2026-KPS-B-179"
+  referenceQuotationId?: string;
+  referenceQuotationNumber: string; // e.g. "2026-KPS-Q-179r3"
+  date: string; // e.g. "17-Nov-26"
+  clientName: string;
+  companyName?: string;
+  projectName: string;
+  projectLocation: string;
+  tableHeaderTitle: string; // default "Billing"
+  itemSummaryText: string; // e.g. "4,152 pcs. Classic Oversized Square paver"
+  contractAmount: number;
+  payments: BillingPaymentEntry[];
+  padFourPaymentSlots: boolean;
+  latePaymentNote: string;
+  paymentDetails: {
+    payableTo: string;
+    bankName: string;
+    accountNumber: string;
+    accountName: string;
+  };
+  signatory: {
+    name: string;
+    title: string;
+  };
+  createdByUserId?: string;
+  createdByEmail?: string;
+  createdByName?: string;
+  createdAt: number;
+  updatedAt: number;
+}
 
 export interface QuotationData {
   id: string;
@@ -81,10 +127,15 @@ This quotation is valid for thirty (30) calendar days from the date of issue. Co
 
 const STORAGE_KEYS = {
   QUOTATIONS: 'kuma_quotations_v1',
+  BILLINGS: 'kuma_billing_statements_v1',
   CURRENT_DRAFT: 'kuma_current_draft_v1',
   CATALOG: 'kuma_paver_catalog_v1',
-  LAST_QUOTE_NUM: 'kuma_last_quote_number'
+  LAST_QUOTE_NUM: 'kuma_last_quote_number',
+  LAST_BILLING_NUM: 'kuma_last_billing_number',
 };
+
+export const DEFAULT_LATE_PAYMENT_NOTE =
+  '* KUMA CONCRETE has the right to charge 2% interest per month on late payments';
 
 export function getSavedCatalog(): PaverItem[] {
   try {
@@ -155,4 +206,163 @@ export function formatQuotationDate(d: Date = new Date()): string {
   const month = monthNames[d.getMonth()];
   const year = String(d.getFullYear()).slice(-2);
   return `${day}-${month}-${year}`;
+}
+
+// =============================================================================
+// Billing Statement Helpers & Storage
+// =============================================================================
+
+export function getSavedBillingStatements(): BillingStatementData[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.BILLINGS);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {
+    console.error('Failed to load saved billing statements', e);
+  }
+  return [];
+}
+
+export function saveBillingStatement(billing: BillingStatementData): void {
+  const existing = getSavedBillingStatements();
+  const idx = existing.findIndex((b) => b.id === billing.id);
+  if (idx >= 0) {
+    existing[idx] = { ...billing, updatedAt: Date.now() };
+  } else {
+    existing.unshift({ ...billing, updatedAt: Date.now() });
+  }
+  localStorage.setItem(STORAGE_KEYS.BILLINGS, JSON.stringify(existing));
+  localStorage.setItem(STORAGE_KEYS.LAST_BILLING_NUM, billing.billingNumber);
+}
+
+export function deleteBillingStatement(id: string): void {
+  const existing = getSavedBillingStatements().filter((b) => b.id !== id);
+  localStorage.setItem(STORAGE_KEYS.BILLINGS, JSON.stringify(existing));
+}
+
+export function getNextBillingNumber(): string {
+  const last = localStorage.getItem(STORAGE_KEYS.LAST_BILLING_NUM) || '2026-KPS-B-179';
+  const match = last.match(/^(.*?)(\d+)$/);
+  if (match) {
+    const prefix = match[1];
+    const num = parseInt(match[2], 10) + 1;
+    return `${prefix}${num}`;
+  }
+  const year = new Date().getFullYear();
+  return `${year}-KPS-B-180`;
+}
+
+/**
+ * Converts a quotation number such as "2026-KPS-Q-179r3" into "2026-KPS-B-179"
+ */
+export function quotationNumberToBillingNumber(quoteNum?: string): string {
+  const trimmed = (quoteNum || '').trim();
+  if (!trimmed) return getNextBillingNumber();
+  if (/-Q-/i.test(trimmed)) {
+    const replaced = trimmed.replace(/-Q-/i, '-B-').replace(/r\d+$/i, '');
+    return replaced;
+  }
+  return getNextBillingNumber();
+}
+
+/**
+ * Formats quotation line items into concise billing description lines,
+ * e.g. "4,152 pcs. Classic Oversized Square paver"
+ */
+export function formatQuotationItemsForBilling(items: QuotationLineItem[]): string {
+  if (!items || items.length === 0) return '';
+  return items
+    .map((item) => {
+      if (item.type === 'custom') {
+        return (item.description || '').replace(/:\s*$/, '').trim();
+      }
+      const rawDesc = (item.description || '').trim();
+      // Strip trailing dimension suffix like " - 200x400x60mm" for cleaner billing summary if present
+      const cleanName = rawDesc.replace(/\s*-\s*\d+\s*[x×]\s*\d+(?:\s*[x×]\s*\d+)?\s*mm\s*$/i, '').trim();
+      if (item.pieces && item.pieces > 0) {
+        return `${item.pieces.toLocaleString()} pcs. ${cleanName || rawDesc}`;
+      }
+      if (item.sqm && item.sqm > 0) {
+        return `${item.sqm} SQM ${cleanName || rawDesc}`;
+      }
+      return cleanName || rawDesc;
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+export function createBlankBillingStatement(): BillingStatementData {
+  return {
+    id: `billing-${Date.now()}`,
+    billingNumber: getNextBillingNumber(),
+    referenceQuotationId: undefined,
+    referenceQuotationNumber: '',
+    date: formatQuotationDate(new Date()),
+    clientName: '',
+    companyName: '',
+    projectName: '',
+    projectLocation: '',
+    tableHeaderTitle: 'Billing',
+    itemSummaryText: '',
+    contractAmount: 0,
+    payments: [],
+    padFourPaymentSlots: true,
+    latePaymentNote: DEFAULT_LATE_PAYMENT_NOTE,
+    paymentDetails: {
+      payableTo: 'Kuma Concrete Inc.',
+      bankName: 'BDO',
+      accountNumber: '008590004762',
+      accountName: 'Kuma Concrete Inc.',
+    },
+    signatory: {
+      name: 'Enrico G. Vazquez',
+      title: 'President',
+    },
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+}
+
+export function createBillingFromQuotation(quote: QuotationData): BillingStatementData {
+  const summary = calculateQuotationSummary(
+    quote.items,
+    quote.discount,
+    quote.delivery,
+    quote.vatConfig
+  );
+
+  const bankRaw = (quote.paymentDetails?.bankName || 'BDO').trim();
+  const normalizedBank = bankRaw === 'BDO (Banco de Oro)' ? 'BDO' : bankRaw;
+
+  return {
+    id: `billing-${Date.now()}`,
+    billingNumber: quotationNumberToBillingNumber(quote.quotationNumber),
+    referenceQuotationId: quote.id,
+    referenceQuotationNumber: quote.quotationNumber || '',
+    date: formatQuotationDate(new Date()),
+    clientName: quote.clientName || '',
+    companyName: quote.companyName || '',
+    projectName: quote.projectName || '',
+    projectLocation: quote.projectLocation || '',
+    tableHeaderTitle: 'Billing',
+    itemSummaryText: formatQuotationItemsForBilling(quote.items),
+    contractAmount: summary.grandTotal,
+    payments: [],
+    padFourPaymentSlots: true,
+    latePaymentNote: DEFAULT_LATE_PAYMENT_NOTE,
+    paymentDetails: {
+      payableTo: quote.paymentDetails?.payableTo || 'Kuma Concrete Inc.',
+      bankName: normalizedBank,
+      accountNumber: quote.paymentDetails?.accountNumber || '008590004762',
+      accountName: quote.paymentDetails?.accountName || 'Kuma Concrete Inc.',
+    },
+    signatory: {
+      name: quote.signatory?.name || 'Enrico G. Vazquez',
+      title: quote.signatory?.title || 'President',
+    },
+    createdByUserId: quote.createdByUserId,
+    createdByEmail: quote.createdByEmail,
+    createdByName: quote.createdByName,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
 }

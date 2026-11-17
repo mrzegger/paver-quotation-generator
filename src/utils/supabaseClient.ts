@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient, User } from '@supabase/supabase-js';
-import { QuotationData } from './storage';
+import { QuotationData, BillingStatementData } from './storage';
 import { PaverItem } from '../data/paverCatalog';
 
 const supabaseUrl = 
@@ -140,7 +140,9 @@ export async function fetchCloudQuotations(): Promise<QuotationData[]> {
     throw error;
   }
 
-  return (data || []).map(mapDbRecordToQuotation);
+  return (data || [])
+    .filter((rec: any) => !(rec.id?.startsWith('billing-') || rec.discount?._recordType === 'billing'))
+    .map(mapDbRecordToQuotation);
 }
 
 export async function saveCloudQuotation(
@@ -200,6 +202,124 @@ export async function deleteCloudQuotation(id: string): Promise<void> {
     console.error('Error deleting quotation from Supabase:', error);
     throw error;
   }
+}
+
+// =============================================================================
+// Billing Statements Cloud Sync Helpers (stored cleanly via existing quotations table JSONB)
+// =============================================================================
+
+export async function fetchCloudBillingStatements(): Promise<BillingStatementData[]> {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from('quotations')
+    .select('*')
+    .order('updated_at', { ascending: false });
+
+  if (error) {
+    console.error('Error fetching billing statements from Supabase:', error);
+    throw error;
+  }
+
+  return (data || [])
+    .filter((rec: any) => rec.id?.startsWith('billing-') || rec.discount?._recordType === 'billing')
+    .map((rec: any) => {
+      if (rec.discount?._billingData) {
+        return rec.discount._billingData as BillingStatementData;
+      }
+      return {
+        id: rec.id,
+        billingNumber: rec.quotation_number || '',
+        referenceQuotationNumber: '',
+        date: rec.date || '',
+        clientName: rec.client_name || '',
+        companyName: rec.company_name || '',
+        projectName: rec.project_name || '',
+        projectLocation: rec.project_location || '',
+        tableHeaderTitle: rec.table_header_title || 'Billing',
+        itemSummaryText: '',
+        contractAmount: 0,
+        payments: [],
+        padFourPaymentSlots: true,
+        latePaymentNote: '* KUMA CONCRETE has the right to charge 2% interest per month on late payments',
+        paymentDetails: rec.payment_details || {
+          payableTo: 'Kuma Concrete Inc.',
+          bankName: 'BDO',
+          accountNumber: '008590004762',
+          accountName: 'Kuma Concrete Inc.',
+        },
+        signatory: rec.signatory || { name: 'Enrico G. Vazquez', title: 'President' },
+        createdByUserId: rec.created_by_user_id,
+        createdByEmail: rec.created_by_email,
+        createdByName: rec.created_by_name,
+        createdAt: rec.created_at ? new Date(rec.created_at).getTime() : Date.now(),
+        updatedAt: rec.updated_at ? new Date(rec.updated_at).getTime() : Date.now(),
+      } as BillingStatementData;
+    });
+}
+
+export async function saveCloudBillingStatement(
+  billing: BillingStatementData,
+  user?: User | null
+): Promise<void> {
+  if (!supabase) return;
+
+  const userEmail = user?.email || billing.createdByEmail || '';
+  const userName =
+    user?.user_metadata?.full_name || billing.createdByName || userEmail.split('@')[0] || '';
+  const userId = user?.id || billing.createdByUserId || null;
+
+  const billingWithAuthor: BillingStatementData = {
+    ...billing,
+    createdByUserId: userId || undefined,
+    createdByEmail: userEmail,
+    createdByName: userName,
+    updatedAt: Date.now(),
+  };
+
+  const dbPayload = {
+    id: billing.id,
+    quotation_number: billing.billingNumber,
+    date: billing.date,
+    client_name: billing.clientName,
+    company_name: billing.companyName || '',
+    project_name: billing.projectName,
+    project_location: billing.projectLocation,
+    table_header_title: billing.tableHeaderTitle || 'Billing',
+    items: [],
+    discount: {
+      enabled: false,
+      type: 'percentage',
+      value: 0,
+      amount: 0,
+      _recordType: 'billing',
+      _billingData: billingWithAuthor,
+    },
+    delivery: {
+      enabled: false,
+      description: '',
+      deliveriesCount: '',
+      amount: 0,
+    },
+    payment_details: billing.paymentDetails,
+    signatory: billing.signatory,
+    created_by_user_id: userId,
+    created_by_email: userEmail,
+    created_by_name: userName,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { error } = await supabase
+    .from('quotations')
+    .upsert(dbPayload, { onConflict: 'id' });
+
+  if (error) {
+    console.error('Error saving billing statement to Supabase:', error);
+    throw error;
+  }
+}
+
+export async function deleteCloudBillingStatement(id: string): Promise<void> {
+  return deleteCloudQuotation(id);
 }
 
 // =============================================================================
