@@ -22,6 +22,7 @@ export interface ParsedPdfQuotation {
   items: QuotationLineItem[];
   discount?: QuotationDiscount;
   delivery?: QuotationDelivery;
+  grandTotal?: number;
   previewImageUrl?: string;
 }
 
@@ -197,6 +198,7 @@ export async function parseExistingQuotationPdf(
   const items: QuotationLineItem[] = [];
   let discount: QuotationDiscount | undefined;
   let delivery: QuotationDelivery | undefined;
+  let grandTotal: number | undefined;
   let previewImageUrl: string | undefined;
 
   // Render Page 1 to canvas for the Reference Dock preview
@@ -287,6 +289,17 @@ export async function parseExistingQuotationPdf(
         (it) => it.y > 550 && it.y < 585 && it.x < 250 && !/Good day|thankful|pleased/i.test(it.str)
       );
       if (thMatch) tableHeaderTitle = thMatch.str;
+    }
+
+    // Check for GRAND TOTAL CONTRACT PRICE on this page
+    const gtLabelItem = rawItems.find((it) => /GRAND TOTAL CONTRACT PRICE/i.test(it.str));
+    if (gtLabelItem) {
+      const gtAmtText = rawItems
+        .filter((it) => it.x >= 450 && Math.abs(it.y - gtLabelItem.y) <= 6)
+        .map((it) => it.str)
+        .join(' ');
+      const parsedGt = parsePhpAmount(gtAmtText);
+      if (parsedGt > 0) grandTotal = parsedGt;
     }
 
     // Identify table Y range on this page
@@ -411,6 +424,7 @@ export async function parseExistingQuotationPdf(
     items,
     discount,
     delivery,
+    grandTotal,
     previewImageUrl,
   };
 }

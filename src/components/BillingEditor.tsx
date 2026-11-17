@@ -44,6 +44,7 @@ interface BillingEditorProps {
   catalog: PaverItem[];
   currentUser?: SupabaseUser | null;
   onChange: (updated: BillingStatementData) => void;
+  onSetReferenceImage?: (imageUrl: string | null) => void;
 }
 
 export const BillingEditor: React.FC<BillingEditorProps> = ({
@@ -52,16 +53,39 @@ export const BillingEditor: React.FC<BillingEditorProps> = ({
   catalog,
   currentUser,
   onChange,
+  onSetReferenceImage,
 }) => {
   const [savedQuotes, setSavedQuotes] = useState<QuotationData[]>(() => getSavedQuotations());
-  const [selectedSourceId, setSelectedSourceId] = useState<string>(
-    billing.referenceQuotationId || '__ACTIVE__'
-  );
+  const [selectedSourceId, setSelectedSourceId] = useState<string>(() => {
+    if (billing.referenceQuotationId) {
+      return billing.referenceQuotationId === activeQuotation.id
+        ? '__ACTIVE__'
+        : billing.referenceQuotationId;
+    }
+    if (
+      billing.referenceQuotationNumber &&
+      billing.referenceQuotationNumber === activeQuotation.quotationNumber &&
+      (billing.clientName || billing.companyName || billing.contractAmount > 0)
+    ) {
+      return '__ACTIVE__';
+    }
+    return '';
+  });
   const [isLoadingQuotes, setIsLoadingQuotes] = useState(false);
   const [isUploadingPdf, setIsUploadingPdf] = useState(false);
   const [showPaymentAccordion, setShowPaymentAccordion] = useState(false);
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (billing.referenceQuotationId) {
+      setSelectedSourceId(
+        billing.referenceQuotationId === activeQuotation.id
+          ? '__ACTIVE__'
+          : billing.referenceQuotationId
+      );
+    }
+  }, [billing.referenceQuotationId, activeQuotation.id]);
 
   useEffect(() => {
     setSavedQuotes(getSavedQuotations());
@@ -93,16 +117,32 @@ export const BillingEditor: React.FC<BillingEditorProps> = ({
     onChange({ ...billing, [key]: value });
   };
 
-  const handleApplyQuotationSource = (sourceId: string) => {
-    const sourceQuote =
-      sourceId === '__ACTIVE__'
-        ? activeQuotation
-        : savedQuotes.find((q) => q.id === sourceId);
+  const allCandidateQuotes = [
+    activeQuotation,
+    ...savedQuotes.filter((q) => q.id !== activeQuotation.id),
+  ];
 
-    if (!sourceQuote) return;
+  const findMatchingQuotationByNumber = (inputNum: string): QuotationData | undefined => {
+    const clean = (inputNum || '').trim().toLowerCase();
+    if (!clean || clean.length < 4) return undefined;
+    // 1. Exact quotationNumber match
+    const exact = allCandidateQuotes.find(
+      (q) => (q.quotationNumber || '').trim().toLowerCase() === clean
+    );
+    if (exact) return exact;
+    // 2. Match ignoring trailing revision suffix (e.g. 2026-KPS-Q-179 matches 2026-KPS-Q-179r3)
+    const stripRev = (s: string) => s.replace(/r\d+$/i, '');
+    const cleanBase = stripRev(clean);
+    if (cleanBase.length >= 6) {
+      return allCandidateQuotes.find(
+        (q) => stripRev((q.quotationNumber || '').trim().toLowerCase()) === cleanBase
+      );
+    }
+    return undefined;
+  };
 
+  const applyQuoteObjectToBilling = (sourceQuote: QuotationData, customContractAmount?: number) => {
     const generated = createBillingFromQuotation(sourceQuote);
-    // Keep any already entered payments if updating the same quotation
     const keepPayments =
       billing.referenceQuotationNumber &&
       billing.referenceQuotationNumber === generated.referenceQuotationNumber &&
@@ -111,12 +151,28 @@ export const BillingEditor: React.FC<BillingEditorProps> = ({
     onChange({
       ...generated,
       id: billing.id,
+      contractAmount:
+        customContractAmount && customContractAmount > 0
+          ? customContractAmount
+          : generated.contractAmount,
       payments: keepPayments ? billing.payments : [],
       padFourPaymentSlots: billing.padFourPaymentSlots,
     });
 
     setImportFeedback(`Linked to ${sourceQuote.quotationNumber}`);
     setTimeout(() => setImportFeedback(null), 2500);
+  };
+
+  const handleApplyQuotationSource = (sourceId: string) => {
+    if (!sourceId) return;
+    setSelectedSourceId(sourceId);
+    const sourceQuote =
+      sourceId === '__ACTIVE__'
+        ? activeQuotation
+        : savedQuotes.find((q) => q.id === sourceId);
+
+    if (!sourceQuote) return;
+    applyQuoteObjectToBilling(sourceQuote);
   };
 
   const handleUploadQuotationPdf = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -167,8 +223,16 @@ export const BillingEditor: React.FC<BillingEditorProps> = ({
       onChange({
         ...generated,
         id: billing.id,
+        contractAmount:
+          parsed.grandTotal && parsed.grandTotal > 0
+            ? parsed.grandTotal
+            : generated.contractAmount,
         padFourPaymentSlots: billing.padFourPaymentSlots,
       });
+      if (parsed.previewImageUrl) {
+        onSetReferenceImage?.(parsed.previewImageUrl);
+      }
+      setSelectedSourceId('');
       setImportFeedback(`Imported ${generated.referenceQuotationNumber || file.name}`);
       setTimeout(() => setImportFeedback(null), 3000);
     } catch (err) {
@@ -246,41 +310,51 @@ export const BillingEditor: React.FC<BillingEditorProps> = ({
         <div className="flex flex-col sm:flex-row gap-2">
           <select
             value={selectedSourceId}
-            onChange={(e) => setSelectedSourceId(e.target.value)}
+            onChange={(e) => {
+              const val = e.target.value;
+              setSelectedSourceId(val);
+              if (val) {
+                handleApplyQuotationSource(val);
+              }
+            }}
             className="flex-1 p-2 border border-gray-300 rounded-lg text-xs font-semibold bg-white focus:ring-2 focus:ring-amber-500 focus:outline-none"
           >
+            <option value="">-- Select a Quotation to Bill --</option>
             <option value="__ACTIVE__">
               Active Quote: {activeQuotation.quotationNumber} —{' '}
               {activeQuotation.companyName || activeQuotation.clientName || 'Untitled'} (
               {formatPHP(activeSummary.grandTotal)})
             </option>
-            {savedQuotes.length > 0 && (
+            {savedQuotes.filter((q) => q.id !== activeQuotation.id).length > 0 && (
               <optgroup label="Saved Quotations History">
-                {savedQuotes.map((q) => {
-                  const qSum = calculateQuotationSummary(
-                    q.items,
-                    q.discount,
-                    q.delivery,
-                    q.vatConfig
-                  );
-                  return (
-                    <option key={q.id} value={q.id}>
-                      {q.quotationNumber} — {q.companyName || q.clientName || 'Untitled'} •{' '}
-                      {q.projectName || 'Pavers'} ({formatPHP(qSum.grandTotal)})
-                    </option>
-                  );
-                })}
+                {savedQuotes
+                  .filter((q) => q.id !== activeQuotation.id)
+                  .map((q) => {
+                    const qSum = calculateQuotationSummary(
+                      q.items,
+                      q.discount,
+                      q.delivery,
+                      q.vatConfig
+                    );
+                    return (
+                      <option key={q.id} value={q.id}>
+                        {q.quotationNumber} — {q.companyName || q.clientName || 'Untitled'} •{' '}
+                        {q.projectName || 'Pavers'} ({formatPHP(qSum.grandTotal)})
+                      </option>
+                    );
+                  })}
               </optgroup>
             )}
           </select>
 
           <button
             type="button"
-            onClick={() => handleApplyQuotationSource(selectedSourceId)}
+            onClick={() => handleApplyQuotationSource(selectedSourceId || '__ACTIVE__')}
             className="px-3.5 py-2 bg-gray-900 hover:bg-black text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs transition whitespace-nowrap"
+            title="Re-sync fields from the selected quotation"
           >
             <RefreshCw className={`w-3.5 h-3.5 text-amber-400 ${isLoadingQuotes ? 'animate-spin' : ''}`} />
-            Load from Quote
+            Refresh
           </button>
 
           <button
@@ -417,14 +491,51 @@ export const BillingEditor: React.FC<BillingEditorProps> = ({
 
           {/* Referenced Quotation Number */}
           <div>
-            <label className="block text-xs font-bold text-gray-700 mb-1 flex items-center gap-1.5">
-              <FileText className="w-3.5 h-3.5 text-amber-600" />
-              Referenced Quotation Number
+            <label className="block text-xs font-bold text-gray-700 mb-1 flex items-center justify-between gap-1.5">
+              <span className="flex items-center gap-1.5">
+                <FileText className="w-3.5 h-3.5 text-amber-600" />
+                Referenced Quotation Number
+              </span>
+              {(() => {
+                const matched = findMatchingQuotationByNumber(billing.referenceQuotationNumber);
+                if (!matched) return null;
+                return (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedSourceId(
+                        matched.id === activeQuotation.id ? '__ACTIVE__' : matched.id
+                      );
+                      applyQuoteObjectToBilling(matched);
+                    }}
+                    className="text-[10.5px] text-amber-700 hover:text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded font-semibold"
+                  >
+                    Autofill from {matched.quotationNumber}
+                  </button>
+                );
+              })()}
             </label>
             <input
               type="text"
               value={billing.referenceQuotationNumber}
-              onChange={(e) => updateField('referenceQuotationNumber', e.target.value)}
+              onChange={(e) => {
+                const nextNum = e.target.value;
+                const matched = findMatchingQuotationByNumber(nextNum);
+                const isBillingCoreBlank =
+                  !billing.clientName &&
+                  !billing.companyName &&
+                  !billing.itemSummaryText &&
+                  !(billing.contractAmount > 0);
+
+                if (matched && isBillingCoreBlank) {
+                  setSelectedSourceId(
+                    matched.id === activeQuotation.id ? '__ACTIVE__' : matched.id
+                  );
+                  applyQuoteObjectToBilling(matched);
+                } else {
+                  updateField('referenceQuotationNumber', nextNum);
+                }
+              }}
               className="w-full p-2 border border-gray-300 rounded-lg text-xs font-mono font-bold focus:ring-2 focus:ring-amber-500 focus:outline-none"
               placeholder="e.g. 2026-KPS-Q-179r3"
             />

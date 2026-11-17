@@ -337,7 +337,24 @@ export function App() {
             </button>
             <button
               type="button"
-              onClick={() => setActiveMode('billing')}
+              onClick={() => {
+                const isBillingBlank =
+                  !currentBilling.referenceQuotationNumber &&
+                  !currentBilling.clientName &&
+                  !currentBilling.companyName &&
+                  !(currentBilling.contractAmount > 0);
+                const hasActiveQuoteData = Boolean(
+                  currentQuote.clientName ||
+                    currentQuote.companyName ||
+                    currentQuote.projectName ||
+                    currentQuote.items.length > 0
+                );
+                if (isBillingBlank && hasActiveQuoteData) {
+                  handleCreateBillingFromQuote(currentQuote);
+                } else {
+                  setActiveMode('billing');
+                }
+              }}
               className={`px-3 py-1.5 rounded-md flex items-center gap-1.5 transition ${
                 activeMode === 'billing'
                   ? 'bg-amber-500 text-gray-950 shadow-sm'
@@ -544,6 +561,10 @@ export function App() {
               catalog={catalog}
               currentUser={currentUser}
               onChange={setCurrentBilling}
+              onSetReferenceImage={(url) => {
+                setReferenceImageUrl(url);
+                if (url) setIsDockOpen(true);
+              }}
             />
           ) : (
             <QuotationEditor
