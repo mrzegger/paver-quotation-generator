@@ -54,7 +54,8 @@ import {
   isSupabaseConfigured, 
   signOutUser, 
   saveCloudQuotation,
-  saveCloudBillingStatement
+  saveCloudBillingStatement,
+  checkUserEmailAllowed
 } from './utils/supabaseClient';
 import { User as SupabaseUser } from '@supabase/supabase-js';
 
@@ -64,22 +65,67 @@ export function App() {
   // Supabase Auth State
   const [currentUser, setCurrentUser] = useState<SupabaseUser | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
 
   useEffect(() => {
+    const searchParams = new URLSearchParams(window.location.search);
+    const hashRaw = window.location.hash.startsWith('#')
+      ? window.location.hash.slice(1)
+      : window.location.hash;
+    const hashParams = new URLSearchParams(hashRaw);
+    const oauthError =
+      searchParams.get('error_description') || hashParams.get('error_description');
+
+    if (oauthError) {
+      setAuthError(oauthError);
+      setIsAuthModalOpen(true);
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
     if (!supabase) return;
+
+    let cancelled = false;
+
+    const verifyAndSetUser = async (user: SupabaseUser | null) => {
+      if (cancelled) return;
+      if (!user) {
+        setCurrentUser(null);
+        return;
+      }
+
+      const { allowed, reason } = await checkUserEmailAllowed(user.email);
+      if (cancelled) return;
+
+      if (allowed) {
+        setCurrentUser(user);
+        setAuthError(null);
+      } else {
+        await signOutUser();
+        if (cancelled) return;
+        setCurrentUser(null);
+        setAuthError(reason || 'Access denied: this email is not authorized.');
+        setIsAuthModalOpen(true);
+      }
+    };
 
     // Check initial user session
     supabase.auth.getUser().then(({ data: { user } }) => {
-      setCurrentUser(user);
+      void verifyAndSetUser(user);
     });
 
-    // Listen to login/logout events
+    // Listen to login/logout events (deferred out of callback to avoid Supabase auth lock deadlock)
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setCurrentUser(session?.user || null);
+      const nextUser = session?.user || null;
+      setTimeout(() => {
+        if (!cancelled) {
+          void verifyAndSetUser(nextUser);
+        }
+      }, 0);
     });
 
     return () => {
+      cancelled = true;
       subscription.unsubscribe();
     };
   }, []);
@@ -719,10 +765,15 @@ export function App() {
       {/* Auth Modal */}
       {isAuthModalOpen && (
         <AuthModal
+          initialError={authError}
           onSuccess={() => {
+            setAuthError(null);
             setIsAuthModalOpen(false);
           }}
-          onClose={() => setIsAuthModalOpen(false)}
+          onClose={() => {
+            setAuthError(null);
+            setIsAuthModalOpen(false);
+          }}
         />
       )}
 

@@ -2,15 +2,41 @@ import { createClient, SupabaseClient, User } from '@supabase/supabase-js';
 import { QuotationData, BillingStatementData } from './storage';
 import { PaverItem } from '../data/paverCatalog';
 
-const supabaseUrl = 
-  import.meta.env.VITE_SUPABASE_URL || 
-  import.meta.env.NEXT_PUBLIC_SUPABASE_URL || 
+function normalizeEnvValue(raw: string): string {
+  const trimmed = raw.trim();
+  if (
+    trimmed.length >= 2 &&
+    ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+      (trimmed.startsWith("'") && trimmed.endsWith("'")))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+function normalizeSupabaseUrl(raw: string): string {
+  const cleaned = normalizeEnvValue(raw);
+  if (!cleaned) return '';
+  try {
+    const parsed = new URL(cleaned);
+    return parsed.origin;
+  } catch {
+    return cleaned.replace(/\/+$/, '');
+  }
+}
+
+const rawSupabaseUrl =
+  import.meta.env.VITE_SUPABASE_URL ||
+  import.meta.env.NEXT_PUBLIC_SUPABASE_URL ||
   import.meta.env.SUPABASE_URL || '';
 
-const supabaseAnonKey = 
-  import.meta.env.VITE_SUPABASE_ANON_KEY || 
-  import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 
+const rawSupabaseAnonKey =
+  import.meta.env.VITE_SUPABASE_ANON_KEY ||
+  import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
   import.meta.env.SUPABASE_ANON_KEY || '';
+
+const supabaseUrl = normalizeSupabaseUrl(rawSupabaseUrl);
+const supabaseAnonKey = normalizeEnvValue(rawSupabaseAnonKey);
 
 export const isSupabaseConfigured = (): boolean => {
   return Boolean(
@@ -32,8 +58,89 @@ export const supabase: SupabaseClient | null = isSupabaseConfigured()
   : null;
 
 // =============================================================================
-// Auth Helpers
+// Auth Helpers & Email Whitelist
 // =============================================================================
+
+export function getAllowedEmailsFromEnv(): string[] {
+  const raw = normalizeEnvValue(import.meta.env.VITE_ALLOWED_EMAILS || '');
+  if (!raw) return [];
+  return raw
+    .split(/[,;\n]+/)
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+export async function checkUserEmailAllowed(
+  email?: string | null
+): Promise<{ allowed: boolean; reason?: string }> {
+  const normalizedEmail = (email || '').trim().toLowerCase();
+  if (!normalizedEmail) {
+    return {
+      allowed: false,
+      reason: 'No email address was returned by your Google account.',
+    };
+  }
+
+  const envAllowedEmails = getAllowedEmailsFromEnv();
+  const envMatched = envAllowedEmails.length > 0 && envAllowedEmails.includes(normalizedEmail);
+
+  if (envAllowedEmails.length > 0 && !envMatched) {
+    return {
+      allowed: false,
+      reason: `${normalizedEmail} is not on the authorized email list.`,
+    };
+  }
+
+  if (supabase) {
+    const { data, error } = await supabase
+      .from('allowed_emails')
+      .select('email')
+      .ilike('email', normalizedEmail)
+      .maybeSingle();
+
+    if (!error) {
+      if (data) {
+        return { allowed: true };
+      }
+      return {
+        allowed: false,
+        reason: `${normalizedEmail} is not authorized to access this workspace. Ask an admin to add it to allowed_emails in Supabase.`,
+      };
+    }
+
+    console.warn('Error checking allowed_emails in Supabase:', error.message);
+    if (envMatched) {
+      return { allowed: true };
+    }
+    return {
+      allowed: false,
+      reason:
+        'Authorized email list is not configured in Supabase yet. Run the updated supabase/schema.sql and add your email to allowed_emails.',
+    };
+  }
+
+  return envMatched
+    ? { allowed: true }
+    : {
+        allowed: false,
+        reason: 'Supabase is not configured.',
+      };
+}
+
+export async function signInWithGoogle() {
+  if (!supabase) {
+    throw new Error('Supabase is not configured yet. Please add your credentials in environment variables.');
+  }
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: window.location.origin,
+      queryParams: { prompt: 'select_account' },
+    },
+  });
+  if (error) throw error;
+  return data;
+}
 
 export async function getCurrentUser(): Promise<User | null> {
   if (!supabase) return null;
