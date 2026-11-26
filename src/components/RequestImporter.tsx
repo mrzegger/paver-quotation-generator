@@ -45,6 +45,66 @@ interface RequestImporterProps {
   onClose: () => void;
 }
 
+/**
+ * Upscales small screenshots and enhances grayscale contrast in an offscreen canvas
+ * so Tesseract accurately recognizes small table fonts, symbols (m²), and punctuation.
+ */
+async function preprocessImageForOcr(file: File): Promise<Blob | File> {
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error('Failed to load image for OCR preprocessing'));
+      image.src = objectUrl;
+    });
+
+    const rawScale = img.width < 1200 ? 3 : img.width < 2000 ? 2 : 1;
+    const maxDim = Math.max(img.width, img.height);
+    const scale = maxDim > 0 ? Math.min(rawScale, 3600 / maxDim) : 1;
+
+    const targetWidth = Math.max(1, Math.round(img.width * scale));
+    const targetHeight = Math.max(1, Math.round(img.height * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return file;
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, targetWidth, targetHeight);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+
+    const imageData = ctx.getImageData(0, 0, targetWidth, targetHeight);
+    const data = imageData.data;
+    const factor = 1.45;
+
+    for (let i = 0; i < data.length; i += 4) {
+      const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      const contrasted = Math.min(255, Math.max(0, (gray - 128) * factor + 128));
+      data[i] = contrasted;
+      data[i + 1] = contrasted;
+      data[i + 2] = contrasted;
+    }
+
+    ctx.putImageData(imageData, 0, 0);
+
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob((b) => resolve(b), 'image/png')
+    );
+    return blob || file;
+  } catch (err) {
+    console.warn('OCR image preprocessing skipped, using original image:', err);
+    return file;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
 export const RequestImporter: React.FC<RequestImporterProps> = ({
   catalog,
   onApplyData,
@@ -102,11 +162,15 @@ export const RequestImporter: React.FC<RequestImporterProps> = ({
     setStatusMsg('Initializing OCR engine...');
 
     try {
+      setStatusMsg('Enhancing image for OCR...');
+      const ocrSource = await preprocessImageForOcr(file);
+      setProgress(25);
+
       const worker = await createWorker('eng');
-      setProgress(40);
+      setProgress(45);
       setStatusMsg('Reading text from request screenshot...');
 
-      const ret = await worker.recognize(file);
+      const ret = await worker.recognize(ocrSource);
       setProgress(85);
       setStatusMsg('Parsing quotation details...');
 
@@ -581,12 +645,20 @@ PROJECT ESTIMATE ITEMIZATION
                         </p>
                       </div>
                       <div className="text-right">
-                        <span className="font-bold text-gray-900">
-                          {item.pieces ? `${item.pieces.toLocaleString()} PCS` : ''}
-                        </span>
-                        {item.sqm && (
-                          <span className="text-gray-500 text-[11px] block">
-                            ({item.sqm} SQM)
+                        {item.pieces || item.sqm ? (
+                          <>
+                            <span className="font-bold text-gray-900">
+                              {item.pieces ? `${item.pieces.toLocaleString()} PCS` : ''}
+                            </span>
+                            {item.sqm && (
+                              <span className="text-gray-500 text-[11px] block">
+                                ({item.sqm} SQM)
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          <span className="text-[11px] font-semibold text-amber-700 bg-amber-100 px-2 py-0.5 rounded">
+                            Qty/Area not detected
                           </span>
                         )}
                       </div>
