@@ -8,6 +8,7 @@ import {
   getSavedBillingStatements,
   saveBillingStatement,
   deleteBillingStatement,
+  calculateBillingTotals,
 } from '../utils/storage';
 import {
   fetchCloudQuotations,
@@ -447,8 +448,7 @@ export const QuotationHistory: React.FC<QuotationHistoryProps> = ({
             </div>
           ) : (
             filteredBillings.map((b) => {
-              const paid = (b.payments || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
-              const due = (b.contractAmount || 0) - paid;
+              const totals = calculateBillingTotals(b);
               return (
                 <div
                   key={b.id}
@@ -499,10 +499,16 @@ export const QuotationHistory: React.FC<QuotationHistoryProps> = ({
                       Project: {b.projectName || 'Pavers'} • {b.projectLocation}
                     </p>
                     <p className="text-[11px] font-semibold text-gray-700">
-                      Due: <span className="font-mono text-gray-900">{formatPHP(due)}</span>{' '}
+                      Due: <span className="font-mono text-gray-900">{formatPHP(totals.amountDueForThisBilling)}</span>{' '}
                       <span className="text-gray-400 font-normal">
                         (of {formatPHP(b.contractAmount || 0)})
                       </span>
+                      {totals.hasBalanceAfterBilling && (
+                        <span className="text-amber-700 font-medium">
+                          {' '}
+                          • After: {formatPHP(totals.amountDueAfterThisBilling)}
+                        </span>
+                      )}
                     </p>
                   </div>
 

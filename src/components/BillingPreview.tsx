@@ -1,5 +1,5 @@
 import React from 'react';
-import { BillingStatementData } from '../utils/storage';
+import { BillingStatementData, calculateBillingTotals } from '../utils/storage';
 import { formatPHP } from '../utils/pricingCalculator';
 
 interface BillingPreviewProps {
@@ -8,11 +8,12 @@ interface BillingPreviewProps {
 }
 
 export const BillingPreview: React.FC<BillingPreviewProps> = ({ billing, scale = 1 }) => {
-  const totalPaymentsMade = (billing.payments || []).reduce(
-    (sum, p) => sum + (Number(p.amount) || 0),
-    0
-  );
-  const totalAmountDue = Math.round(((billing.contractAmount || 0) - totalPaymentsMade) * 100) / 100;
+  const {
+    totalPaymentsMade,
+    amountDueForThisBilling,
+    amountDueAfterThisBilling,
+    hasBalanceAfterBilling,
+  } = calculateBillingTotals(billing);
 
   const displayPayments = [...(billing.payments || [])];
   if (billing.padFourPaymentSlots) {
@@ -148,16 +149,29 @@ export const BillingPreview: React.FC<BillingPreviewProps> = ({ billing, scale =
                 </td>
               </tr>
 
-              {/* Row 3: TOTAL AMOUNT DUE */}
+              {/* Row 3: TOTAL AMOUNT DUE FOR THIS BILLING */}
               <tr className="border-b border-black align-middle">
-                <td className="border-r border-black py-1.5 px-3 text-center font-bold text-[15px] text-gray-900">
-                  TOTAL AMOUNT DUE
+                <td className="border-r border-black py-1.5 px-3 text-center font-bold text-[13.5px] text-gray-900">
+                  TOTAL AMOUNT DUE FOR THIS BILLING
                 </td>
                 <td className="border-r border-black"></td>
-                <td className="py-1.5 px-2 text-center font-bold underline text-[14.5px] text-gray-900">
-                  {formatPHP(totalAmountDue)}
+                <td className="py-1.5 px-2 text-center font-bold underline text-[14px] text-gray-900">
+                  {formatPHP(amountDueForThisBilling)}
                 </td>
               </tr>
+
+              {/* Row 4 (Conditional): TOTAL AMOUNT DUE AFTER THIS BILLING */}
+              {hasBalanceAfterBilling && (
+                <tr className="border-b border-black align-middle">
+                  <td className="border-r border-black py-1.5 px-3 text-center font-bold text-[12px] text-gray-700">
+                    TOTAL AMOUNT DUE AFTER THIS BILLING
+                  </td>
+                  <td className="border-r border-black"></td>
+                  <td className="py-1.5 px-2 text-center font-bold text-[12.5px] text-gray-800">
+                    {formatPHP(amountDueAfterThisBilling)}
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
 

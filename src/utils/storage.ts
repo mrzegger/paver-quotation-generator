@@ -27,6 +27,7 @@ export interface BillingStatementData {
   tableHeaderTitle: string; // default "Billing"
   itemSummaryText: string; // e.g. "4,152 pcs. Classic Oversized Square paver"
   contractAmount: number;
+  currentBillingAmount?: number; // optional custom amount being charged in this billing statement
   payments: BillingPaymentEntry[];
   padFourPaymentSlots: boolean;
   latePaymentNote: string;
@@ -136,6 +137,40 @@ const STORAGE_KEYS = {
 
 export const DEFAULT_LATE_PAYMENT_NOTE =
   '* KUMA CONCRETE has the right to charge 2% interest per month on late payments';
+
+export function calculateBillingTotals(
+  billing: Pick<BillingStatementData, 'contractAmount' | 'payments' | 'currentBillingAmount'>
+) {
+  const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+  const contractAmount = Number(billing.contractAmount) || 0;
+  const totalPaymentsMade = round2(
+    (billing.payments || []).reduce((sum, p) => sum + (Number(p.amount) || 0), 0)
+  );
+  const remainingContractBalance = round2(contractAmount - totalPaymentsMade);
+  const hasCustomBillingAmount =
+    billing.currentBillingAmount !== undefined &&
+    billing.currentBillingAmount !== null &&
+    !Number.isNaN(Number(billing.currentBillingAmount));
+
+  const amountDueForThisBilling = hasCustomBillingAmount
+    ? round2(Number(billing.currentBillingAmount))
+    : remainingContractBalance;
+
+  const amountDueAfterThisBilling = round2(
+    Math.max(0, remainingContractBalance - amountDueForThisBilling)
+  );
+  const hasBalanceAfterBilling = amountDueAfterThisBilling > 0;
+
+  return {
+    contractAmount,
+    totalPaymentsMade,
+    remainingContractBalance,
+    hasCustomBillingAmount,
+    amountDueForThisBilling,
+    amountDueAfterThisBilling,
+    hasBalanceAfterBilling,
+  };
+}
 
 export function getSavedCatalog(): PaverItem[] {
   try {
@@ -304,6 +339,7 @@ export function createBlankBillingStatement(): BillingStatementData {
     tableHeaderTitle: 'Billing',
     itemSummaryText: '',
     contractAmount: 0,
+    currentBillingAmount: undefined,
     payments: [],
     padFourPaymentSlots: true,
     latePaymentNote: DEFAULT_LATE_PAYMENT_NOTE,
@@ -346,6 +382,7 @@ export function createBillingFromQuotation(quote: QuotationData): BillingStateme
     tableHeaderTitle: 'Billing',
     itemSummaryText: formatQuotationItemsForBilling(quote.items),
     contractAmount: summary.grandTotal,
+    currentBillingAmount: undefined,
     payments: [],
     padFourPaymentSlots: true,
     latePaymentNote: DEFAULT_LATE_PAYMENT_NOTE,

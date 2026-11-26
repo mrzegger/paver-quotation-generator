@@ -19,6 +19,7 @@ import {
   CreditCard,
   Loader2,
   CheckCircle2,
+  DollarSign,
 } from 'lucide-react';
 import {
   BillingStatementData,
@@ -31,6 +32,7 @@ import {
   formatQuotationDate,
   quotationNumberToBillingNumber,
   createBillingFromQuotation,
+  calculateBillingTotals,
 } from '../utils/storage';
 import { PaverItem } from '../data/paverCatalog';
 import { calculateQuotationSummary, formatPHP } from '../utils/pricingCalculator';
@@ -104,11 +106,14 @@ export const BillingEditor: React.FC<BillingEditorProps> = ({
     }
   }, [currentUser]);
 
-  const totalPaymentsMade = (billing.payments || []).reduce(
-    (sum, p) => sum + (Number(p.amount) || 0),
-    0
-  );
-  const totalAmountDue = Math.round(((billing.contractAmount || 0) - totalPaymentsMade) * 100) / 100;
+  const {
+    totalPaymentsMade,
+    remainingContractBalance,
+    hasCustomBillingAmount,
+    amountDueForThisBilling,
+    amountDueAfterThisBilling,
+    hasBalanceAfterBilling,
+  } = calculateBillingTotals(billing);
 
   const updateField = <K extends keyof BillingStatementData>(
     key: K,
@@ -155,6 +160,7 @@ export const BillingEditor: React.FC<BillingEditorProps> = ({
         customContractAmount && customContractAmount > 0
           ? customContractAmount
           : generated.contractAmount,
+      currentBillingAmount: keepPayments ? billing.currentBillingAmount : undefined,
       payments: keepPayments ? billing.payments : [],
       padFourPaymentSlots: billing.padFourPaymentSlots,
     });
@@ -620,7 +626,14 @@ export const BillingEditor: React.FC<BillingEditorProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleAddPayment(totalAmountDue > 0 ? totalAmountDue : billing.contractAmount * 0.1, 'Remaining Balance')}
+                  onClick={() =>
+                    handleAddPayment(
+                      remainingContractBalance > 0
+                        ? remainingContractBalance
+                        : billing.contractAmount * 0.1,
+                      'Remaining Balance'
+                    )
+                  }
                   className="px-2 py-1 border border-gray-200 bg-gray-50 hover:bg-gray-100 text-gray-700 rounded text-[11px] font-semibold transition"
                 >
                   + Balance
@@ -702,6 +715,102 @@ export const BillingEditor: React.FC<BillingEditorProps> = ({
         </label>
       </div>
 
+      {/* Charge for This Billing Card */}
+      <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <DollarSign className="w-4 h-4 text-amber-600" />
+            <h3 className="text-sm font-bold text-gray-900">Charge for This Billing</h3>
+          </div>
+          {billing.contractAmount > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                onClick={() =>
+                  updateField(
+                    'currentBillingAmount',
+                    Math.round((billing.contractAmount * 0.5 + Number.EPSILON) * 100) / 100
+                  )
+                }
+                className="px-2 py-1 border border-gray-200 bg-gray-50 hover:bg-gray-100 text-gray-700 rounded text-[11px] font-semibold transition"
+              >
+                50% DP
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  updateField(
+                    'currentBillingAmount',
+                    Math.round((billing.contractAmount * 0.4 + Number.EPSILON) * 100) / 100
+                  )
+                }
+                className="px-2 py-1 border border-gray-200 bg-gray-50 hover:bg-gray-100 text-gray-700 rounded text-[11px] font-semibold transition"
+              >
+                40% Progress
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  updateField(
+                    'currentBillingAmount',
+                    Math.round((billing.contractAmount * 0.1 + Number.EPSILON) * 100) / 100
+                  )
+                }
+                className="px-2 py-1 border border-gray-200 bg-gray-50 hover:bg-gray-100 text-gray-700 rounded text-[11px] font-semibold transition"
+              >
+                10% Final
+              </button>
+              <button
+                type="button"
+                onClick={() => updateField('currentBillingAmount', undefined)}
+                className="px-2 py-1 border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded text-[11px] font-semibold transition"
+              >
+                Full Balance
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div>
+          <label className="block text-xs font-bold text-gray-700 mb-1">
+            Amount to Charge for This Billing (PHP)
+          </label>
+          <input
+            type="number"
+            step="0.01"
+            value={billing.currentBillingAmount !== undefined ? billing.currentBillingAmount : ''}
+            onChange={(e) => {
+              if (e.target.value === '') {
+                updateField('currentBillingAmount', undefined);
+              } else {
+                updateField('currentBillingAmount', parseFloat(e.target.value) || 0);
+              }
+            }}
+            placeholder={
+              remainingContractBalance > 0
+                ? `Full remaining balance (${remainingContractBalance.toFixed(2)})`
+                : '0.00'
+            }
+            className="w-full p-2 border border-gray-300 rounded-lg text-xs font-mono font-bold text-right focus:ring-2 focus:ring-amber-500 focus:outline-none"
+          />
+          <p
+            className={`text-[11px] mt-1.5 ${
+              amountDueForThisBilling > remainingContractBalance && remainingContractBalance > 0
+                ? 'text-amber-700 font-semibold'
+                : 'text-gray-500'
+            }`}
+          >
+            {!hasCustomBillingAmount
+              ? `Defaults to the full remaining balance (${formatPHP(remainingContractBalance)}). Enter a partial amount to charge only part of it now.`
+              : hasBalanceAfterBilling
+                ? `Balance remaining after this billing: ${formatPHP(amountDueAfterThisBilling)} (will appear as "TOTAL AMOUNT DUE AFTER THIS BILLING").`
+                : amountDueForThisBilling > remainingContractBalance && remainingContractBalance > 0
+                  ? `Warning: entered charge exceeds the remaining contract balance (${formatPHP(remainingContractBalance)}).`
+                  : 'No balance remaining after this billing (the extra balance row will stay hidden).'}
+          </p>
+        </div>
+      </div>
+
       {/* Billing Financial Summary Card */}
       <div className="p-5 bg-gradient-to-br from-gray-900 to-gray-800 text-white rounded-xl shadow-lg space-y-2.5 text-xs">
         <h4 className="font-bold uppercase tracking-wider text-amber-400">
@@ -715,12 +824,26 @@ export const BillingEditor: React.FC<BillingEditorProps> = ({
           <span>Less: Total Payments Made:</span>
           <span className="font-mono">-{formatPHP(totalPaymentsMade)}</span>
         </div>
-        <div className="border-t-2 border-amber-500/60 pt-2.5 flex justify-between text-sm md:text-base font-extrabold text-amber-400">
-          <span>TOTAL AMOUNT DUE:</span>
-          <span className="font-mono text-white bg-amber-600/30 px-2.5 py-0.5 rounded border border-amber-500/40">
-            {formatPHP(totalAmountDue)}
+        {hasCustomBillingAmount && (
+          <div className="flex justify-between text-gray-300">
+            <span>Remaining Contract Balance:</span>
+            <span className="font-mono">{formatPHP(remainingContractBalance)}</span>
+          </div>
+        )}
+        <div className="border-t-2 border-amber-500/60 pt-2.5 flex justify-between items-center gap-2 text-sm md:text-base font-extrabold text-amber-400">
+          <span>TOTAL AMOUNT DUE FOR THIS BILLING:</span>
+          <span className="font-mono text-white bg-amber-600/30 px-2.5 py-0.5 rounded border border-amber-500/40 whitespace-nowrap">
+            {formatPHP(amountDueForThisBilling)}
           </span>
         </div>
+        {hasBalanceAfterBilling && (
+          <div className="flex justify-between items-center gap-2 text-xs font-bold text-gray-200 pt-1">
+            <span>TOTAL AMOUNT DUE AFTER THIS BILLING:</span>
+            <span className="font-mono text-gray-100 whitespace-nowrap">
+              {formatPHP(amountDueAfterThisBilling)}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Payment Details, Late Fee Note & Signatory Accordion */}

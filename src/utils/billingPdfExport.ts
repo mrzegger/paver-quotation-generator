@@ -1,5 +1,5 @@
 import jsPDF from 'jspdf';
-import { BillingStatementData } from './storage';
+import { BillingStatementData, calculateBillingTotals } from './storage';
 import { formatPHP } from './pricingCalculator';
 
 function sanitizePdfText(str: string = ''): string {
@@ -75,11 +75,12 @@ export async function downloadBillingPdf(
     compress: true,
   });
 
-  const totalPaymentsMade = (billing.payments || []).reduce(
-    (sum, p) => sum + (Number(p.amount) || 0),
-    0
-  );
-  const totalAmountDue = Math.round(((billing.contractAmount || 0) - totalPaymentsMade) * 100) / 100;
+  const {
+    totalPaymentsMade,
+    amountDueForThisBilling,
+    amountDueAfterThisBilling,
+    hasBalanceAfterBilling,
+  } = calculateBillingTotals(billing);
 
   const displayPayments = [...(billing.payments || [])];
   if (billing.padFourPaymentSlots) {
@@ -258,18 +259,18 @@ export async function downloadBillingPdf(
   pdf.setTextColor(20, 20, 20);
   curY += row2H;
 
-  // Row 3: TOTAL AMOUNT DUE
+  // Row 3: TOTAL AMOUNT DUE FOR THIS BILLING
   const row3H = 8.0;
   pdf.rect(tableX, curY, tableW, row3H);
   pdf.line(col2X, curY, col2X, curY + row3H);
   pdf.line(col3X, curY, col3X, curY + row3H);
 
   pdf.setFont('helvetica', 'bold');
-  pdf.setFontSize(12);
-  pdf.text('TOTAL AMOUNT DUE', col1X + col1W / 2, curY + 5.5, { align: 'center' });
+  pdf.setFontSize(10.5);
+  pdf.text('TOTAL AMOUNT DUE FOR THIS BILLING', col1X + col1W / 2, curY + 5.5, { align: 'center' });
 
-  const dueStr = formatPHP(totalAmountDue);
-  pdf.setFontSize(11.5);
+  const dueStr = formatPHP(amountDueForThisBilling);
+  pdf.setFontSize(11);
   pdf.text(dueStr, col3X + col3W / 2, curY + 5.4, { align: 'center' });
   const dueW = pdf.getTextWidth(dueStr);
   pdf.setLineWidth(0.35);
@@ -280,6 +281,30 @@ export async function downloadBillingPdf(
     curY + 6.2
   );
   curY += row3H;
+
+  // Row 4 (Conditional): TOTAL AMOUNT DUE AFTER THIS BILLING
+  if (hasBalanceAfterBilling) {
+    const row4H = 7.5;
+    pdf.setLineWidth(0.3);
+    pdf.rect(tableX, curY, tableW, row4H);
+    pdf.line(col2X, curY, col2X, curY + row4H);
+    pdf.line(col3X, curY, col3X, curY + row4H);
+
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(9.5);
+    pdf.setTextColor(60, 60, 60);
+    pdf.text('TOTAL AMOUNT DUE AFTER THIS BILLING', col1X + col1W / 2, curY + 5.1, {
+      align: 'center',
+    });
+
+    pdf.setFontSize(10);
+    pdf.setTextColor(40, 40, 40);
+    pdf.text(formatPHP(amountDueAfterThisBilling), col3X + col3W / 2, curY + 5.1, {
+      align: 'center',
+    });
+    pdf.setTextColor(20, 20, 20);
+    curY += row4H;
+  }
 
   // I. Payment Details & Signatures below table
   curY += 7.0;
