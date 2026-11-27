@@ -12,9 +12,15 @@ interface AuthModalProps {
   onSuccess: () => void;
   onClose: () => void;
   initialError?: string | null;
+  fullScreen?: boolean;
 }
 
-export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess, onClose, initialError }) => {
+export const AuthModal: React.FC<AuthModalProps> = ({
+  onSuccess,
+  onClose,
+  initialError,
+  fullScreen = false,
+}) => {
   const [showEmailLogin, setShowEmailLogin] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -64,28 +70,48 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess, onClose, initia
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+    <div
+      className={
+        fullScreen
+          ? 'min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 flex flex-col items-center justify-center p-4'
+          : 'fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4'
+      }
+    >
+      {fullScreen && (
+        <div className="mb-6 bg-white rounded-xl px-5 py-3 shadow-xl border border-gray-200/80">
+          <img
+            src="/logo_header.jpeg"
+            alt="Kuma Concrete Logo"
+            className="h-12 w-auto object-contain"
+          />
+        </div>
+      )}
+
       <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl overflow-hidden border border-gray-200 animate-in fade-in zoom-in-95 duration-150">
         
         {/* Header */}
         <div className="bg-gray-900 text-white p-6 relative">
-          <button
-            type="button"
-            onClick={onClose}
-            className="absolute top-4 right-4 text-gray-400 hover:text-white p-1 rounded-lg transition"
-          >
-            ✕
-          </button>
+          {!fullScreen && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="absolute top-4 right-4 text-gray-400 hover:text-white p-1 rounded-lg transition"
+            >
+              ✕
+            </button>
+          )}
           <div className="flex items-center gap-3">
             <div className="p-2.5 bg-amber-500/20 text-amber-400 rounded-xl border border-amber-500/30">
               <LogIn className="w-5 h-5" />
             </div>
             <div>
               <h3 className="font-bold text-lg text-white">
-                Sign In to Kuma Concrete
+                {fullScreen ? 'Kuma Concrete Portal' : 'Sign In to Kuma Concrete'}
               </h3>
               <p className="text-xs text-gray-300">
-                Access your cloud quotations, billing statements, and team price list
+                {fullScreen
+                  ? 'Private workspace — authorized Google accounts only'
+                  : 'Access your cloud quotations, billing statements, and team price list'}
               </p>
             </div>
           </div>
@@ -154,7 +180,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess, onClose, initia
           <div className="flex items-start gap-2 p-3 bg-gray-50 border border-gray-200 rounded-xl text-[11px] text-gray-600">
             <ShieldCheck className="w-4 h-4 text-emerald-600 flex-shrink-0 mt-0.5" />
             <span>
-              Access is restricted to authorized Kuma Concrete Google accounts.
+              {fullScreen
+                ? 'Only pre-registered Google accounts can access this app. Contact the administrator if you need access.'
+                : 'Access is restricted to authorized Kuma Concrete Google accounts.'}
             </span>
           </div>
 

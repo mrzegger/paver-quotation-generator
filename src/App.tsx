@@ -64,6 +64,7 @@ export function App() {
 
   // Supabase Auth State
   const [currentUser, setCurrentUser] = useState<SupabaseUser | null>(null);
+  const [isAuthChecking, setIsAuthChecking] = useState<boolean>(() => isSupabaseConfigured());
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
@@ -83,36 +84,52 @@ export function App() {
       window.history.replaceState({}, document.title, window.location.pathname);
     }
 
-    if (!supabase) return;
+    if (!supabase) {
+      setIsAuthChecking(false);
+      return;
+    }
 
     let cancelled = false;
 
     const verifyAndSetUser = async (user: SupabaseUser | null) => {
       if (cancelled) return;
-      if (!user) {
-        setCurrentUser(null);
-        return;
-      }
+      try {
+        if (!user) {
+          setCurrentUser(null);
+          return;
+        }
 
-      const { allowed, reason } = await checkUserEmailAllowed(user.email);
-      if (cancelled) return;
-
-      if (allowed) {
-        setCurrentUser(user);
-        setAuthError(null);
-      } else {
-        await signOutUser();
+        const { allowed, reason } = await checkUserEmailAllowed(user.email);
         if (cancelled) return;
-        setCurrentUser(null);
-        setAuthError(reason || 'Access denied: this email is not authorized.');
-        setIsAuthModalOpen(true);
+
+        if (allowed) {
+          setCurrentUser(user);
+          setAuthError(null);
+        } else {
+          await signOutUser();
+          if (cancelled) return;
+          setCurrentUser(null);
+          setAuthError(reason || 'Access denied: this email is not authorized.');
+          setIsAuthModalOpen(true);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsAuthChecking(false);
+        }
       }
     };
 
     // Check initial user session
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      void verifyAndSetUser(user);
-    });
+    supabase.auth
+      .getUser()
+      .then(({ data: { user } }) => {
+        void verifyAndSetUser(user);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setIsAuthChecking(false);
+        }
+      });
 
     // Listen to login/logout events (deferred out of callback to avoid Supabase auth lock deadlock)
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -333,6 +350,35 @@ export function App() {
     await signOutUser();
     setIsUserMenuOpen(false);
   };
+
+  if (isSupabaseConfigured() && isAuthChecking) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center gap-4 text-white p-4">
+        <div className="bg-white rounded-xl px-5 py-3 shadow-xl">
+          <img
+            src="/logo_header.jpeg"
+            alt="Kuma Concrete Logo"
+            className="h-12 w-auto object-contain"
+          />
+        </div>
+        <div className="flex items-center gap-2.5 text-sm text-gray-200 font-medium">
+          <Loader2 className="w-6 h-6 animate-spin text-amber-400" />
+          <span>Verifying authorized access...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (isSupabaseConfigured() && !currentUser) {
+    return (
+      <AuthModal
+        fullScreen
+        initialError={authError}
+        onSuccess={() => setAuthError(null)}
+        onClose={() => {}}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col font-sans">
